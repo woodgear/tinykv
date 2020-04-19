@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -50,6 +51,7 @@ type Ready struct {
 
 	// Entries specifies entries to be saved to stable storage BEFORE
 	// Messages are sent.
+	// TODO rename to UnStableEntry
 	Entries []pb.Entry
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
@@ -58,6 +60,7 @@ type Ready struct {
 	// CommittedEntries specifies entries to be committed to a
 	// store/state-machine. These have previously been committed to stable
 	// store.
+    // TODO rename to UnApplyEntry
 	CommittedEntries []pb.Entry
 
 	// Messages specifies outbound messages to be sent AFTER Entries are
@@ -70,13 +73,17 @@ type Ready struct {
 // RawNode is a wrapper of Raft.
 type RawNode struct {
 	Raft *Raft
-	// Your Data Here (2A).
+	preHardState pb.HardState
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
-	return nil, nil
+	raft :=newRaft(config)
+	return &RawNode {
+		Raft: raft,
+		preHardState:raft.hardState(),
+	},nil
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -143,8 +150,11 @@ func (rn *RawNode) Step(m pb.Message) error {
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
-	// Your Code Here (2A).
-	return Ready{}
+	return Ready {
+		Entries:rn.Raft.RaftLog.unstableEntries(),
+		CommittedEntries: rn.Raft.RaftLog.unAppliedEntis(),
+		Messages: rn.Raft.msgs,
+	}
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
@@ -155,8 +165,17 @@ func (rn *RawNode) HasReady() bool {
 
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
+// 实际上指的是将数据存储到持久化卷 应用entry到状态机的过程
 func (rn *RawNode) Advance(rd Ready) {
-	// Your Code Here (2A).
+	if len(rd.Entries) > 0 {
+		e := rd.Entries[len(rd.Entries)-1]
+		fmt.Printf("advance update stable %v\n",e.Index)
+		rn.Raft.RaftLog.stabled=e.Index
+	}
+	if rn.Raft.getCommitedID()!= 0 {
+		// fmt.Printf("apply to %v\n",rn.prevHardSt.Commit)
+		rn.Raft.RaftLog.applied = rn.Raft.getCommitedID()
+	}	
 }
 
 // GetProgress return the the Progress of this node and its peers, if this

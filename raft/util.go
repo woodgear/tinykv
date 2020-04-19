@@ -127,3 +127,15 @@ func IsResponseMsg(msgt pb.MessageType) bool {
 func isHardStateEqual(a, b pb.HardState) bool {
 	return a.Term == b.Term && a.Vote == b.Vote && a.Commit == b.Commit
 }
+
+func ShowMsg(msg pb.Message) string {
+	return fmt.Sprintf("type %v From %v to %v entries %+v commit %v\n", msg.MsgType, msg.From, msg.To, msg.Entries, msg.Commit)
+}
+
+func ShowEnttries(ents []pb.Entry) string {
+	s := ""
+	for _, e := range ents {
+		s = fmt.Sprintf("%v index %v term %v data %v ", s, e.Index, e.Term, e.Data)
+	}
+	return s
+}

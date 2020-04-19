@@ -557,6 +557,7 @@ func TestFollowerCommitEntry2AB(t *testing.T) {
 
 		if g := r.RaftLog.committed; g != tt.commit {
 			t.Errorf("#%d: committed = %d, want %d", i, g, tt.commit)
+			return
 		}
 		wents := make([]pb.Entry, 0, tt.commit)
 		for _, ent := range tt.ents[:int(tt.commit)] {

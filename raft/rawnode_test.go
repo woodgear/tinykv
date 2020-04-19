@@ -16,6 +16,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -165,11 +166,14 @@ func TestRawNodeStart2AC(t *testing.T) {
 	}
 	rawNode.Campaign()
 	rd := rawNode.Ready()
+	fmt.Printf("ready 1 %+v \n",rd.Entries)
 	storage.Append(rd.Entries)
 	rawNode.Advance(rd)
 
 	rawNode.Propose([]byte("foo"))
 	rd = rawNode.Ready()
+	fmt.Printf("ready 2 %+v \n c entry %+v\n",rd.Entries,rd.CommittedEntries)
+
 	if el := len(rd.Entries); el != len(rd.CommittedEntries) || el != 1 {
 		t.Errorf("got len(Entries): %+v, len(CommittedEntries): %+v, want %+v", el, len(rd.CommittedEntries), 1)
 	}
@@ -196,7 +200,7 @@ func TestRawNodeRestart2AC(t *testing.T) {
 		// commit up to commit index in st
 		CommittedEntries: entries[:st.Commit],
 	}
-
+fmt.Printf("xxx %v %v\n",entries[:st.Commit],st.Commit)
 	storage := NewMemoryStorage()
 	storage.SetHardState(st)
 	storage.Append(entries)
@@ -206,7 +210,7 @@ func TestRawNodeRestart2AC(t *testing.T) {
 	}
 	rd := rawNode.Ready()
 	if !reflect.DeepEqual(rd, want) {
-		t.Errorf("g = %+v,\n             w   %+v", rd, want)
+		t.Errorf("g = %+v,\n                   			w   %+v", rd, want)
 	}
 	rawNode.Advance(rd)
 	if rawNode.HasReady() {

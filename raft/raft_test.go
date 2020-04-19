@@ -281,6 +281,7 @@ func TestLogReplication2AB(t *testing.T) {
 
 			if sm.RaftLog.committed != tt.wcommitted {
 				t.Errorf("#%d.%d: committed = %d, want %d", i, j, sm.RaftLog.committed, tt.wcommitted)
+				return
 			}
 
 			ents := []pb.Entry{}
@@ -745,8 +746,10 @@ func TestAllServerStepdown2AB(t *testing.T) {
 			if msgType == pb.MessageType_MsgRequestVote {
 				wlead = None
 			}
+			//TODO update point
 			if sm.Lead != wlead {
-				t.Errorf("#%d, sm.Lead = %d, want %d", i, sm.Lead, None)
+				t.Errorf("#%d, sm.Lead = %d, want %d", i, sm.Lead, wlead)
+				return
 			}
 		}
 	}
@@ -908,7 +911,7 @@ func TestDisruptiveFollower2AA(t *testing.T) {
 
 // When the leader receives a heartbeat tick, it should
 // send a MessageType_MsgHeartbeat with m.Index = 0, m.LogTerm=0 and empty entries.
-func TestBcastBeat2AB(t *testing.T) {
+func TestBcastBeat2B(t *testing.T) {
 	offset := uint64(1000)
 	// make a state machine with log.offset = 1000
 	s := pb.Snapshot{
@@ -951,6 +954,7 @@ func TestBcastBeat2AB(t *testing.T) {
 		if m.LogTerm != 0 {
 			t.Fatalf("#%d: prevTerm = %d, want %d", i, m.LogTerm, 0)
 		}
+		fmt.Printf("m to %v %v %v\n", m.To, sm.RaftLog.committed, sm.Prs[2].Match)
 		if wantCommitMap[m.To] == 0 {
 			t.Fatalf("#%d: unexpected to %d", i, m.To)
 		} else {
