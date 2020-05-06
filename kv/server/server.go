@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/pingcap-incubator/tinykv/kv/coprocessor"
-	"github.com/pingcap-incubator/tinykv/scheduler/pkg/tsoutil"
 
 	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/storage"

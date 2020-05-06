@@ -2,6 +2,7 @@ package standalone_storage
 
 import (
 	_ "fmt"
+
 	. "github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/config"
 	. "github.com/pingcap-incubator/tinykv/kv/storage"
@@ -66,7 +67,11 @@ type SimpleStorageReader struct {
 }
 
 func (self *SimpleStorageReader) GetCF(cf string, key []byte) ([]byte, error) {
-	return engine_util.GetCF(self.db, cf, key)
+	v, err := engine_util.GetCF(self.db, cf, key)
+	if err == ErrKeyNotFound {
+		return nil, nil
+	}
+	return v, err
 }
 
 func (self *SimpleStorageReader) IterCF(cf string) engine_util.DBIterator {
