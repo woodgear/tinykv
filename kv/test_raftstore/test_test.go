@@ -145,7 +145,7 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 	}
 }
 
-func TestSimpleCluster(t *testing.T) {
+func TestSimpleCluster2B(t *testing.T) {
 	nservers := 3
 	cfg := config.NewTestConfig()
 	cluster := NewTestCluster(nservers, cfg)
