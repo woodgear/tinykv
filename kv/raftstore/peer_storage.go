@@ -359,7 +359,7 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	ps.raftState.HardState = &hardState
 	// 这里的检查有何意义？
 	if !raft.IsEmptyHardState(hardState) || len(ready.UnStableEntry) != 0 {
-		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), &ps.raftState)
+		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
 	}
 	error := ps.Engines.WriteRaft(raftWb)
 	if error != nil {
