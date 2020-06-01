@@ -8,6 +8,7 @@ import (
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
+	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
 	"github.com/pingcap-incubator/tinykv/raft"
@@ -37,6 +38,7 @@ func newTestPeerStorageFromEnts(t *testing.T, ents []eraftpb.Entry) *PeerStorage
 		Term:  ents[0].Term,
 	}
 	applyState.AppliedIndex = ents[len(ents)-1].Index
+	peerStore.applyState = applyState
 	kvWB.SetMeta(meta.ApplyStateKey(peerStore.region.GetId()), &applyState)
 	require.Nil(t, peerStore.Engines.WriteRaft(raftWB))
 	peerStore.Engines.WriteKV(kvWB)
@@ -57,7 +59,7 @@ func newTestEntry(index, term uint64) eraftpb.Entry {
 	}
 }
 
-func TestPeerStorageTerm(t *testing.T) {
+func TestPeerStorageTerm2B(t *testing.T) {
 	ents := []eraftpb.Entry{
 		newTestEntry(3, 3), newTestEntry(4, 4), newTestEntry(5, 5),
 	}
@@ -73,6 +75,7 @@ func TestPeerStorageTerm(t *testing.T) {
 	}
 	for _, tt := range tests {
 		peerStore := newTestPeerStorageFromEnts(t, ents)
+		log.Debugf("peerStore apply %v", peerStore.applyState)
 		term, err := peerStore.Term(tt.idx)
 		if err != nil {
 			assert.Equal(t, tt.err, err)
@@ -231,6 +234,7 @@ func TestPeerStorageAppend(t *testing.T) {
 	for _, tt := range tests {
 		peerStore := newTestPeerStorageFromEnts(t, ents)
 		defer cleanUpTestData(peerStore)
+		t.Logf("appendEnts %v", len(tt.appends))
 		appendEnts(t, peerStore, tt.appends)
 		li := peerStore.raftState.LastIndex
 		acutualEntries, err := peerStore.Entries(4, li+1)

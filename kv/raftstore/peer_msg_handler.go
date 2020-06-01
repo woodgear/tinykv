@@ -39,19 +39,69 @@ func newPeerMsgHandler(peer *peer, ctx *GlobalContext) *peerMsgHandler {
 }
 
 func (d *peerMsgHandler) HandleRaftReady() {
+	// Your Code Here (2B).
+
 	if d.stopped {
 		return
 	}
-	// Your Code Here (2B).
+
+	if d.RaftGroup.HasReady() {
+		ready := d.RaftGroup.Ready()
+		log.Debugf("raft_id: %v, tag: GenericTest , log: HandleRaftReady Ready 2B=> %s ready %s", d.Meta.GetId(), d.RaftGroup.Raft.RaftLog.MetaString(), ready.String())
+		// save to storage
+		d.peerStorage.SaveReadyState(&ready)
+		// send msgs
+		msgs := ready.Messages
+		log.Debugf("raft_id: %v, log: HandleRaftReady send msgs %+v", d.Meta.GetId(), len(msgs))
+		// send 是个异步的方法
+		// TODO 有可能吗 ready的过程应该是单线程的 即使出现了下述的情况 也应该阻塞在hasReady中才对啊
+		// 一旦process 没有send的返回值快 那么就有可能出现递归的HasReady 所以我们需要在rawnode保证HasReady->Advance的单序
+		d.Send(d.ctx.trans, msgs)
+
+		for _, e := range ready.GetUnApplyEntry() {
+			// 有些applye的entry是不需要处理的 例如新leader的first entry
+			if len(e.Data) == 0 {
+				continue
+			}
+			cmd := raft_cmdpb.RaftCmdRequest{}
+			// we get command now
+			error := cmd.Unmarshal(e.Data)
+			if error != nil {
+				panic(error)
+			}
+			log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", d.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
+			resp, error := d.peerStorage.ProcessRequest(cmd)
+			if error != nil {
+				panic(error)
+			}
+			// TODO 这里一直在调用d的field的方法感觉很怪
+			log.Infof("raft_id:%v find proposal index %v term %v", d.Meta.GetId(), e.Index, e.Term)
+			proposalIndex, find := d.peer.findProposalIndex(e.Index, e.Term)
+			// TODO 在什么情况下为找不到？
+			if find {
+				d.proposals[proposalIndex].cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
+				d.proposals[proposalIndex].cb.Done(resp)
+				// TODO is this the correct way to delete element in  golang?
+				// proposal 如果是顺序的话 那么可以直接更新proposals 这样应该才是正确的做法
+				d.proposals[proposalIndex] = nil
+			}
+		}
+
+		log.Debugf("raft_id:%v, log: time to advace", d.Meta.GetId())
+		d.RaftGroup.Advance(ready)
+	}
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	switch msg.Type {
+	// 其他peer发来的 raft的msg 诸如投票 append之类的
 	case message.MsgTypeRaftMessage:
 		raftMsg := msg.Data.(*rspb.RaftMessage)
 		if err := d.onRaftMsg(raftMsg); err != nil {
-			log.Errorf("%s handle raft message error %v", d.Tag, err)
+			log.Errorf("raft_id:%v %s handle raft message error %v", d.peer.Meta.GetId(), d.Tag, err)
 		}
+	// 客户端的propose/ 客户端的请求
+	// raft-server:write->router->raft_worker
 	case message.MsgTypeRaftCmd:
 		raftCMD := msg.Data.(*message.MsgRaftCmd)
 		d.proposeRaftCommand(raftCMD.Request, raftCMD.Callback)
@@ -107,13 +157,25 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 	return err
 }
 
+// TODO 对查询做优化
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
+	log.Debugf("raft_id:%v, log: GenericTest 2B=> proposeRaftCommand", d.peer.Meta.GetId())
 	err := d.preProposeRaftCommand(msg)
 	if err != nil {
 		cb.Done(ErrResp(err))
 		return
 	}
 	// Your Code Here (2B).
+	data, err := msg.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	log.Debugf("raft_id: %v, log: 2B=> proprose data %v ", d.Meta.GetId(), data)
+	d.RaftGroup.Propose(data)
+	lastIndex := d.RaftGroup.Raft.GetLastIndex() // TODO 绝对很奇怪
+	lastEntry := d.RaftGroup.Raft.GetEntry(lastIndex)
+	log.Debugf("raft_id: %v, log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastEntry.Index, lastEntry.Term)
+	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastEntry.Index, term: lastEntry.Term, cb: cb})
 }
 
 func (d *peerMsgHandler) onTick() {
@@ -162,7 +224,8 @@ func (d *peerMsgHandler) ScheduleCompactLog(firstIndex uint64, truncatedIndex ui
 }
 
 func (d *peerMsgHandler) onRaftMsg(msg *rspb.RaftMessage) error {
-	log.Debugf("%s handle raft message %s from %d to %d",
+	log.Debugf("raft_id: %v, log: %s handle raft message %s from %d to %d",
+		d.peer.Meta.GetId(),
 		d.Tag, msg.GetMessage().GetMsgType(), msg.GetFromPeer().GetId(), msg.GetToPeer().GetId())
 	if !d.validateRaftMessage(msg) {
 		return nil

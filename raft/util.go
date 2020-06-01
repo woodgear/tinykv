@@ -42,7 +42,7 @@ func max(a, b uint64) uint64 {
 
 // IsEmptyHardState returns true if the given HardState is empty.
 func IsEmptyHardState(st pb.HardState) bool {
-	return isHardStateEqual(st, pb.HardState{})
+	return IsHardStateEqual(st, pb.HardState{})
 }
 
 // IsEmptySnap returns true if the given Snapshot is empty.
@@ -124,18 +124,64 @@ func IsResponseMsg(msgt pb.MessageType) bool {
 	return msgt == pb.MessageType_MsgAppendResponse || msgt == pb.MessageType_MsgRequestVoteResponse || msgt == pb.MessageType_MsgHeartbeatResponse
 }
 
-func isHardStateEqual(a, b pb.HardState) bool {
+func IsHardStateEqual(a, b pb.HardState) bool {
 	return a.Term == b.Term && a.Vote == b.Vote && a.Commit == b.Commit
 }
 
-func ShowMsg(msg pb.Message) string {
-	return fmt.Sprintf("type %v From %v to %v entries %+v commit %v\n", msg.MsgType, msg.From, msg.To, msg.Entries, msg.Commit)
+func IsEntriesIndexTermEqual(left, right []pb.Entry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index, _ := range left {
+		if left[index].Index != right[index].Index || right[index].Index != right[index].Term {
+			return false
+		}
+	}
+	return true
 }
 
-func ShowEnttries(ents []pb.Entry) string {
+func ShowMsg(msg pb.Message) string {
+	return fmt.Sprintf("{type %v From %v to %v entries %+v commit %v},", msg.MsgType, msg.From, msg.To, msg.Entries, msg.Commit)
+}
+
+func ShowMsgs(msgs []pb.Message) string {
+	if len(msgs) == 0 {
+		return "Empty"
+	}
 	s := ""
-	for _, e := range ents {
-		s = fmt.Sprintf("%v index %v term %v data %v ", s, e.Index, e.Term, e.Data)
+	for _, m := range msgs {
+		s = fmt.Sprintf("%v %v", s, ShowMsg(m))
 	}
 	return s
+}
+
+func ShowEntry(e pb.Entry) string {
+	return fmt.Sprintf("Entry {index: %v, term: %v, data:%v }", e.Index, e.Term, e.Data)
+}
+
+func ShowEntries(ents []pb.Entry) string {
+	if len(ents) == 0 {
+		return "Empty"
+	}
+	s := "["
+	for _, e := range ents {
+		s = fmt.Sprintf("%v %v,", s, ShowEntry(e))
+	}
+	return fmt.Sprintf("%s]", s)
+}
+
+func ShowPtrEntries(ents []*pb.Entry) string {
+	if len(ents) == 0 {
+		return "Empty"
+	}
+	s := "["
+	for _, e := range ents {
+		s = fmt.Sprintf("%v %v,", s, ShowEntry(*e))
+	}
+	return fmt.Sprintf("%s]", s)
+}
+
+func ShowHardState(h pb.HardState) string {
+	status := fmt.Sprintf("HardState {vote: %v, term: %v, commit: %v}", h.Vote, h.Term, h.Commit)
+	return status
 }

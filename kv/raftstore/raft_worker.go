@@ -4,6 +4,8 @@ import (
 	"sync"
 
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
+	util "github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/log"
 )
 
 // raftWorker is responsible for run raft commands and apply raft logs.
@@ -13,17 +15,18 @@ type raftWorker struct {
 	// receiver of messages should sent to raft, including:
 	// * raft command from `raftStorage`
 	// * raft inner messages from other peers sent by network
-	raftCh chan message.Msg
-	ctx    *GlobalContext
-
-	closeCh <-chan struct{}
+	raftCh   chan message.Msg
+	ctx      *GlobalContext
+	msgCount uint64
+	closeCh  <-chan struct{}
 }
 
 func newRaftWorker(ctx *GlobalContext, pm *router) *raftWorker {
 	return &raftWorker{
-		raftCh: pm.peerSender,
-		ctx:    ctx,
-		pr:     pm,
+		raftCh:   pm.peerSender,
+		ctx:      ctx,
+		pr:       pm,
+		msgCount: 0,
 	}
 }
 
@@ -50,6 +53,13 @@ func (rw *raftWorker) run(closeCh <-chan struct{}, wg *sync.WaitGroup) {
 			peerState := rw.getPeerState(peerStateMap, msg.RegionID)
 			if peerState == nil {
 				continue
+			}
+			if msg.Type == message.MsgTypeRaftCmd {
+				log.Debugf("raft_id: %v, tag:GenericTest , log: raft_woker run msg raftcmd regionId %v", peerState.peer.Meta.GetId(), msg.RegionID)
+			}
+			if msg.Type == 4 {
+				rw.msgCount = rw.msgCount + 1
+				log.Debugf("raft_id: %v,log: raft msg count %v %s", peerState.peer.Meta.GetId(), rw.msgCount, util.ShowRaftCmdMsg(msg))
 			}
 			newPeerMsgHandler(peerState.peer, rw.ctx).HandleMsg(msg)
 		}

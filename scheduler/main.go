@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -112,11 +113,13 @@ func main() {
 	case syscall.SIGTERM:
 		exit(0)
 	default:
+		fmt.Printf("exit with 1")
 		exit(1)
 	}
 }
 
 func exit(code int) {
 	log.Sync()
+	fmt.Printf("exit %v",code)
 	os.Exit(code)
 }

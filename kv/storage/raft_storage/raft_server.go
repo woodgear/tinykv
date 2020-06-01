@@ -2,6 +2,7 @@ package raft_storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,7 +148,7 @@ func (rs *RaftStorage) Reader(ctx *kvrpcpb.Context) (storage.StorageReader, erro
 		panic("can not found region snap")
 	}
 	if len(resp.Responses) != 1 {
-		panic("wrong response count for snap cmd")
+		panic(fmt.Sprintf("wrong response count for snap cmd len is %v",len(resp.Responses)))
 	}
 	return NewRegionReader(cb.Txn, *resp.Responses[0].GetSnap().Region), nil
 }

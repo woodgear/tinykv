@@ -181,7 +181,10 @@ func (c *Cluster) AllocPeer(storeID uint64) *metapb.Peer {
 
 func (c *Cluster) Request(key []byte, reqs []*raft_cmdpb.Request, timeout time.Duration) (*raft_cmdpb.RaftCmdResponse, *badger.Txn) {
 	startTime := time.Now()
+	// TODO question 每个请求重试10遍 或者timeout ？？？
+	// 如何保证不重复？
 	for i := 0; i < 10 || time.Now().Sub(startTime) < timeout; i++ {
+		log.Debugf("req key %v", key)
 		region := c.GetRegion(key)
 		regionID := region.GetId()
 		req := NewRequest(regionID, region.RegionEpoch, reqs)
@@ -219,7 +222,7 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 		request.Header.Peer = leader
 		resp, txn := c.CallCommand(request, 1*time.Second)
 		if resp == nil {
-			log.Debugf("can't call command %s on leader %d of region %d", request.String(), leader.GetId(), regionID)
+			log.Debugf("GenericTest can't call command %s on leader %d of region %d", request.String(), leader.GetId(), regionID)
 			newLeader := c.LeaderOfRegion(regionID)
 			if leader == newLeader {
 				region, _, err := c.schedulerClient.GetRegionByID(context.TODO(), regionID)
@@ -228,6 +231,7 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 				}
 				peers := region.GetPeers()
 				leader = peers[rand.Int()%len(peers)]
+				// TODO 因为 follower会转发所以可以随便发？
 				log.Debugf("leader info maybe wrong, use random leader %d of region %d", leader.GetId(), regionID)
 			} else {
 				leader = newLeader
@@ -252,6 +256,7 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 }
 
 func (c *Cluster) LeaderOfRegion(regionID uint64) *metapb.Peer {
+	// TODO ????
 	for i := 0; i < 500; i++ {
 		_, leader, err := c.schedulerClient.GetRegionByID(context.TODO(), regionID)
 		if err == nil && leader != nil {
@@ -272,7 +277,7 @@ func (c *Cluster) GetRegion(key []byte) *metapb.Region {
 		// retry to get the region again.
 		SleepMS(20)
 	}
-	panic(fmt.Sprintf("find no region for %s", hex.EncodeToString(key)))
+	panic(fmt.Sprintf("find no region for %v %s", key, hex.EncodeToString(key)))
 }
 
 func (c *Cluster) GetRandomRegion() *metapb.Region {
@@ -297,6 +302,7 @@ func (c *Cluster) MustPut(key, value []byte) {
 }
 
 func (c *Cluster) MustPutCF(cf string, key, value []byte) {
+	log.Debugf("must put %s %v", cf, key)
 	req := NewPutCfCmd(cf, key, value)
 	resp, _ := c.Request(key, []*raft_cmdpb.Request{req}, 5*time.Second)
 	if resp.Header.Error != nil {
@@ -322,6 +328,7 @@ func (c *Cluster) Get(key []byte) []byte {
 }
 
 func (c *Cluster) GetCF(cf string, key []byte) []byte {
+	log.Debugf("GetCF %s %v", cf, key)
 	req := NewGetCfCmd(cf, key)
 	resp, _ := c.Request(key, []*raft_cmdpb.Request{req}, 5*time.Second)
 	if resp.Header.Error != nil {
@@ -341,13 +348,15 @@ func (c *Cluster) MustDelete(key []byte) {
 }
 
 func (c *Cluster) MustDeleteCF(cf string, key []byte) {
+	log.Debugf("MustDeleteCF %s %v", cf, key)
+
 	req := NewDeleteCfCmd(cf, key)
 	resp, _ := c.Request(key, []*raft_cmdpb.Request{req}, 5*time.Second)
 	if resp.Header.Error != nil {
 		panic(resp.Header.Error)
 	}
 	if len(resp.Responses) != 1 {
-		panic("len(resp.Responses) != 1")
+		panic(fmt.Sprintf("MustDeleteCF len(resp.Responses) != 1 len is %v", len(resp.Responses)))
 	}
 	if resp.Responses[0].CmdType != raft_cmdpb.CmdType_Delete {
 		panic("resp.Responses[0].CmdType != raft_cmdpb.CmdType_Delete")
@@ -355,6 +364,7 @@ func (c *Cluster) MustDeleteCF(cf string, key []byte) {
 }
 
 func (c *Cluster) Scan(start, end []byte) [][]byte {
+	log.Debugf("scan start %v end %v", start, end)
 	req := NewSnapCmd()
 	values := make([][]byte, 0)
 	key := start
@@ -363,6 +373,7 @@ func (c *Cluster) Scan(start, end []byte) [][]byte {
 		if resp.Header.Error != nil {
 			panic(resp.Header.Error)
 		}
+		log.Debugf("scan response len %v", len(resp.Responses))
 		if len(resp.Responses) != 1 {
 			panic("len(resp.Responses) != 1")
 		}

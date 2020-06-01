@@ -5,11 +5,14 @@ import (
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
+	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
+
 	"github.com/pingcap/errors"
 )
 
@@ -204,4 +207,57 @@ func RegionEqual(l, r *metapb.Region) bool {
 		return false
 	}
 	return l.Id == r.Id && l.RegionEpoch.Version == r.RegionEpoch.Version && l.RegionEpoch.ConfVer == r.RegionEpoch.ConfVer
+}
+
+func ShowRaftCmdRequest(reqs *raft_cmdpb.RaftCmdRequest) string {
+	msg := ""
+	for _, req := range reqs.Requests {
+		switch req.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			{
+				getReq := req.Get
+				msg = fmt.Sprintf("%s {type:%v,val: {cf:%v key:%v} }", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)], getReq.Cf, getReq.Key)
+			}
+		case raft_cmdpb.CmdType_Delete:
+			{
+				delReq := req.Delete
+				msg = fmt.Sprintf("%s {type:%v,val: {cf:%v key:%v }", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)], delReq.Cf, delReq.Key)
+			}
+		case raft_cmdpb.CmdType_Put:
+			{
+				putReq := req.Put
+				msg = fmt.Sprintf("%s {type:%v,val: {cf:%v key:%v,val:%v} }", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)], putReq.Cf, putReq.Key, putReq.Value)
+			}
+		case raft_cmdpb.CmdType_Snap:
+			{
+				msg = fmt.Sprintf("%s {type:%v,}", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)])
+			}
+		}
+	}
+	return msg
+}
+
+func ShowRaftCmdMsg(msg message.Msg) string {
+	raftCMD := msg.Data.(*message.MsgRaftCmd)
+	return fmt.Sprintf("msg {type: %v,region: %v, raftCmd: %s}", msg.Type, msg.RegionID, ShowRaftCmdRequest(raftCMD.Request))
+}
+
+func ShowPeers(peers []*metapb.Peer) string {
+	msg := "["
+	for _, p := range peers {
+		msg = fmt.Sprintf("%s %s", msg, ShowPeer(p))
+	}
+	return fmt.Sprintf("%s]", msg)
+}
+
+func ShowPeer(p *metapb.Peer) string {
+	return fmt.Sprintf("Peer {id: %v, storeId: %v}", p.Id, p.StoreId)
+}
+
+func ShowRaftMessage(msg *rspb.RaftMessage) string {
+	return fmt.Sprintf("{regionId: %v, fromPeer: %v, toPeer: %v}", msg.RegionId, ShowPeer(msg.FromPeer), ShowPeer(msg.ToPeer))
+}
+
+func ShowRegion(region *metapb.Region) string {
+	return fmt.Sprintf("Region {id:%v,start:%v,end:%v,peers:%s}", region.Id, region.StartKey, region.EndKey, ShowPeers(region.Peers))
 }

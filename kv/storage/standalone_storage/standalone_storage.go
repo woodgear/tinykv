@@ -45,7 +45,6 @@ func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []Modify) error {
 	for _, m := range batch {
 		switch m.Data.(type) {
 		case Put:
-			println("put", m.Cf(), m.Key())
 			writeBatch.SetCF(m.Cf(), m.Key(), m.Data.(Put).Value)
 		case Delete:
 			writeBatch.DeleteCF(m.Cf(), m.Key())

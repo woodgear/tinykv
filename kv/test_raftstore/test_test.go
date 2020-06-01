@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	_ "net/http/pprof"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -39,7 +40,7 @@ func SpawnClientsAndWait(t *testing.T, ch chan bool, ncli int, fn func(me int, t
 	// log.Printf("SpawnClientsAndWait: waiting for clients")
 	for cli := 0; cli < ncli; cli++ {
 		ok := <-ca[cli]
-		// log.Infof("SpawnClientsAndWait: client %d is done\n", cli)
+		log.Infof("SpawnClientsAndWait: client %d is done\n", cli)
 		if ok == false {
 			t.Fatalf("failure")
 		}
@@ -144,6 +145,25 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 	}
 }
 
+func TestSimpleCluster(t *testing.T) {
+	nservers := 3
+	cfg := config.NewTestConfig()
+	cluster := NewTestCluster(nservers, cfg)
+	cluster.Start()
+	defer cluster.Shutdown()
+
+	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
+	time.Sleep(10 * electionTimeout)
+	
+	log.Debugf("TestSimpleCluster put %v", []byte("key1"))
+	cluster.MustPut([]byte("key1"), []byte("val1"))
+
+	resp := cluster.Get([]byte("key1"))
+	if !bytes.Equal(resp, []byte("val1")) {
+		t.Errorf("could not get puted value")
+	}
+}
+
 // Basic test is as follows: one or more clients submitting Put/Scan
 // operations to set of servers for some period of time.  After the period is
 // over, test checks that all sequential values are present and in order for a
@@ -155,6 +175,8 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 // - If confchangee is set, the cluster will schedule random conf change concurrently.
 // - If split is set, split region when size exceed 1024 bytes.
 func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash bool, partitions bool, maxraftlog int, confchange bool, split bool) {
+	log.Debugf("tag:time,GenericTest log: start")
+
 	title := "Test: "
 	if unreliable {
 		// the network drops RPC requests and replies.
@@ -192,8 +214,12 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 	defer cluster.Shutdown()
 
 	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
+
 	// Wait for leader election
+	// we must make sure after this there is a leader
 	time.Sleep(2 * electionTimeout)
+
+	log.Debugf("tag:time,GenericTest log: Wait for leader election %v", 2*electionTimeout)
 
 	done_partitioner := int32(0)
 	done_confchanger := int32(0)
@@ -209,6 +235,8 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
+		// spawnClientAndWait 传入的 回调函数是阻塞的,
+		// 会对每个client调用一次 等到所有的client都调用完成时 会向ch_clients 中发送消息
 		go SpawnClientsAndWait(t, ch_clients, nclients, func(cli int, t *testing.T) {
 			j := 0
 			defer func() {
@@ -216,11 +244,15 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			}()
 			last := ""
 			for atomic.LoadInt32(&done_clients) == 0 {
+
 				if (rand.Int() % 1000) < 500 {
 					key := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)
 					value := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
-					// log.Infof("%d: client new put %v,%v\n", cli, key, value)
+					log.Infof("%d: GenericTest 2B=> client new put key=>(%v),val=>(%v)\n", cli, key, value)
+					// MustPut 是阻塞的 会等到Put的Response返回 最大的Timeout是5秒
 					cluster.MustPut([]byte(key), []byte(value))
+					log.Infof("%d: GenericTest 2B=> put get response key %v", cli, key)
+
 					last = NextValue(last, value)
 					j++
 				} else {
@@ -231,6 +263,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 					v := string(bytes.Join(values, []byte("")))
 					if v != last {
 						log.Fatalf("get wrong value, client %v\nwant:%v\ngot: %v\n", cli, last, v)
+						os.Exit(-1)
 					}
 				}
 			}
@@ -247,6 +280,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			go confchanger(t, cluster, ch_confchange, &done_confchanger)
 		}
 		time.Sleep(5 * time.Second)
+		log.Debugf("tag:time,GenericTest log: client should stop")
 		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 		atomic.StoreInt32(&done_confchanger, 1) // tell confchanger to quit
@@ -264,7 +298,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 
 		// log.Printf("wait for clients\n")
 		<-ch_clients
-
+		log.Debugf("GenericTest Client Stop")
 		if crash {
 			log.Warnf("shutdown servers\n")
 			for i := 1; i <= nservers; i++ {
@@ -281,9 +315,9 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		}
 
 		for cli := 0; cli < nclients; cli++ {
-			// log.Printf("read from clients %d\n", cli)
 			j := <-clnts[cli]
 
+			log.Debugf("debug=> tag: time read from clients %d j %v\n", cli, j)
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
@@ -297,6 +331,8 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 				key := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", k)
 				cluster.MustDelete([]byte(key))
 			}
+
+			log.Debugf("debug=> tag: time log: clean over %d j %v\n", cli, j)
 		}
 
 		if maxraftlog > 0 {
@@ -392,17 +428,19 @@ func TestOnePartition2B(t *testing.T) {
 	// old leader in minority, new leader should be elected
 	s2 = append(s2, s1[2])
 	s1 = s1[:2]
+	log.Debugf("tag:GenericTest, log: add filter")
 	cluster.AddFilter(&PartitionFilter{
 		s1: s1,
 		s2: s2,
 	})
 	cluster.MustGet([]byte("k1"), []byte("v1"))
+	// it should not commit ccause leader is minority
 	cluster.MustPut([]byte("k1"), []byte("changed"))
 	MustGetEqual(cluster.engines[s1[0]], []byte("k1"), []byte("v1"))
 	MustGetEqual(cluster.engines[s1[1]], []byte("k1"), []byte("v1"))
-	cluster.ClearFilters()
 
 	// when partition heals, old leader should sync data
+	cluster.ClearFilters()
 	cluster.MustPut([]byte("k2"), []byte("v2"))
 	MustGetEqual(cluster.engines[s1[0]], []byte("k2"), []byte("v2"))
 	MustGetEqual(cluster.engines[s1[0]], []byte("k1"), []byte("changed"))

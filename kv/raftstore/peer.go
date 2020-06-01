@@ -365,7 +365,7 @@ func (p *peer) sendRaftMessage(msg eraftpb.Message, trans Transport) error {
 	if toPeer == nil {
 		return fmt.Errorf("failed to lookup recipient peer %v in region %v", msg.To, p.regionId)
 	}
-	log.Debugf("%v, send raft msg %v from %v to %v", p.Tag, msg.MsgType, fromPeer, toPeer)
+	log.Debugf("raft_id: %v %v, send raft msg %v from %v to %v", p.Meta.GetId(), p.Tag, msg.MsgType, util.ShowPeer(&fromPeer), util.ShowPeer(toPeer))
 
 	sendMsg.FromPeer = &fromPeer
 	sendMsg.ToPeer = toPeer
@@ -384,4 +384,18 @@ func (p *peer) sendRaftMessage(msg eraftpb.Message, trans Transport) error {
 	}
 	sendMsg.Message = &msg
 	return trans.Send(sendMsg)
+}
+
+func (p *peer) findProposalIndex(index, term uint64) (int, bool) {
+	for i, proposal := range p.proposals {
+		if proposal == nil {
+			continue
+		}
+		log.Debugf("GenericTest index %v term %v", proposal.index, proposal.term)
+		if proposal.index == index && proposal.term == term {
+			log.Debugf("GenericTest Get Proposal")
+			return i, true
+		}
+	}
+	return 0, false
 }

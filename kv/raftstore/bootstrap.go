@@ -123,6 +123,7 @@ func writeInitialRaftState(raftWB *engine_util.WriteBatch, regionID uint64) {
 			Commit: meta.RaftInitLogIndex,
 		},
 		LastIndex: meta.RaftInitLogIndex,
+		// TODO question init LastIndexTerm here?
 	}
 	raftWB.SetMeta(meta.RaftStateKey(regionID), raftState)
 }

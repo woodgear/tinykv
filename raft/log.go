@@ -86,7 +86,7 @@ func newLog(storage Storage) *RaftLog {
 	l.initIndex = initIndex
 	l.initTerm = initTerm
 	l.stabled = lastIndex
-
+	l.applied = initIndex // apply 最起码是snapindex
 	// if lastIndex < firstIndex 这表示storage中没有任何 compact->stable之间的entry
 	// 说明这是新起的Raft Node
 	if lastIndex >= firstIndex {
@@ -101,7 +101,6 @@ func newLog(storage Storage) *RaftLog {
 	} else {
 		l.offset = firstIndex
 	}
-	log.Debugf("init log  sfirst %v slast %v offset %v last %v initIndex %v initTerm %v len %v", firstIndex, lastIndex, l.offset, l.LastIndex(), initIndex, initTerm, len(l.entries))
 	return l
 }
 
@@ -115,13 +114,27 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.entries[len(l.entries)-1].Index
 }
 
-func (l *RaftLog) getEntry(index uint64) *pb.Entry {
+func (l *RaftLog) GetTerm(index uint64) uint64 {
+	if index == l.initIndex {
+		return l.initTerm
+	}
+	return l.GetEntry(index).Term
+}
+
+func (l *RaftLog) GetEntry(index uint64) *pb.Entry {
 	//TODO ????????
 	if index == 0 {
 		return &pb.Entry{}
 	}
-	log.Debugf("get entry index %v offset %v real %v", index, l.offset, index-l.offset)
+	if index == l.initIndex {
+
+	}
 	return &l.entries[index-l.offset]
+}
+
+// log中是否为空 （初始化时）
+func (l *RaftLog) IsEmpty() bool {
+	return len(l.entries) == 0
 }
 
 // We need to compact the log entries in some point of time like
@@ -131,11 +144,33 @@ func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
 }
 
-func (l *RaftLog) status() {
-	fmt.Printf("call status apply %v commit %v stable %v lastindex %v entry len %v\n", l.applied, l.committed, l.stabled, l.LastIndex(), len(l.entries))
-	for _, e := range l.entries {
-		fmt.Printf("term %v index %v data %v\n", e.Term, e.Index, e.Data)
-	}
+func (l *RaftLog) String() string {
+	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,offset: %v,entry_len: %v,entries: %v}`,
+		l.initIndex,
+		l.initTerm,
+		l.committed,
+		l.stabled,
+		l.applied,
+		l.LastIndex(),
+		l.offset,
+		len(l.entries),
+		ShowEntries(l.entries),
+	)
+	return status
+}
+
+func (l *RaftLog) MetaString() string {
+	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,offset: %v,entry_len: %v}`,
+		l.initIndex,
+		l.initTerm,
+		l.committed,
+		l.stabled,
+		l.applied,
+		l.LastIndex(),
+		l.offset,
+		len(l.entries),
+	)
+	return status
 }
 
 // unstableEntries return all the unstable entries
@@ -143,7 +178,7 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	entries := []pb.Entry{}
 
 	for index := l.stabled + 1; index <= l.LastIndex(); index++ {
-		entry := l.getEntry(index)
+		entry := l.GetEntry(index)
 		if entry == nil {
 			panic("err find a nil entry")
 		}
@@ -159,8 +194,14 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 	entries := []pb.Entry{}
+
+	// TODO need explain or better code
+	if len(l.entries) == 0 {
+		return entries
+	}
+
 	for index := l.applied + 1; index <= l.committed; index++ {
-		entry := l.getEntry(index)
+		entry := l.GetEntry(index)
 		if entry == nil {
 			panic("err find a nil entry")
 		}
@@ -174,7 +215,7 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	if i == l.initIndex {
 		return l.initTerm, nil
 	}
-	entry := l.getEntry(i)
+	entry := l.GetEntry(i)
 	return entry.Term, nil
 
 }
@@ -223,7 +264,7 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 	// 当我们收到server发来的Entries时 有几种情况需要分类讨论
 	// 首先保证 server的Entries是合法的
 
-	if preLogIndex > l.LastIndex() || l.getEntry(preLogIndex).Term != preLogTerm {
+	if preLogIndex > l.LastIndex() || l.GetTerm(preLogIndex) != preLogTerm {
 		return 0, fmt.Errorf("could not find this index and term")
 	}
 
@@ -248,15 +289,15 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 	serverEntriesLastIndex := serverEntries[len(serverEntries)-1].Index
 	// 2. follower的Entries完全包含了server发过来的Entries
 	if hasConflict == false && serverEntriesLastIndex <= l.LastIndex() {
-		fmt.Printf("tryAppendEntries: conflict false log = flog\n")
+		log.Warnf("tryAppendEntries: conflict false log = flog\n")
 	} else if hasConflict == false && serverEntriesLastIndex > l.LastIndex() {
 		// 2. serverlog与follower entries不冲突 且存在交集
-		fmt.Printf("tryAppendEntries: conflict false log = slog + part of flog\n")
+		log.Warnf("tryAppendEntries: conflict false log = slog + part of flog\n")
 		l.entries = append(l.entries, serverEntries[serverSamedIndex+1:]...)
 	} else {
 		// 3. entries冲突
 		// 这时我们要重置stable,因为stable有可能也被server的log改变了
-		fmt.Printf("tryAppendEntries: conflict true log = part of slog + flog\n")
+		log.Warnf("tryAppendEntries: conflict true log = part of slog + flog\n")
 		l.entries = append(l.entries[:followerSamedIndex+1], serverEntries...)
 		l.stabled = min(uint64(followerSamedIndex)+l.offset, l.stabled)
 	}

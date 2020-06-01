@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -41,10 +42,10 @@ func TestRawNodeProposeAndConfChange3A(t *testing.T) {
 		t.Fatal(err)
 	}
 	rd := rawNode.Ready()
-	s.Append(rd.Entries)
+	s.Append(rd.UnStableEntry)
 	rawNode.Advance(rd)
 
-	if d := rawNode.Ready(); !IsEmptyHardState(d.HardState) || len(d.Entries) > 0 {
+	if d := rawNode.Ready(); !IsEmptyHardState(d.HardState) || len(d.UnStableEntry) > 0 {
 		t.Fatalf("expected empty hard state: %#v", d)
 	}
 
@@ -89,13 +90,13 @@ func TestRawNodeProposeAddDuplicateNode3A(t *testing.T) {
 		t.Fatal(err)
 	}
 	rd := rawNode.Ready()
-	s.Append(rd.Entries)
+	s.Append(rd.UnStableEntry)
 	rawNode.Advance(rd)
 
 	rawNode.Campaign()
 	for {
 		rd = rawNode.Ready()
-		s.Append(rd.Entries)
+		s.Append(rd.UnStableEntry)
 		if rd.SoftState.Lead == rawNode.Raft.id {
 			rawNode.Advance(rd)
 			break
@@ -106,8 +107,8 @@ func TestRawNodeProposeAddDuplicateNode3A(t *testing.T) {
 	proposeConfChangeAndApply := func(cc pb.ConfChange) {
 		rawNode.ProposeConfChange(cc)
 		rd = rawNode.Ready()
-		s.Append(rd.Entries)
-		for _, entry := range rd.CommittedEntries {
+		s.Append(rd.UnStableEntry)
+		for _, entry := range rd.UnApplyEntry {
 			if entry.EntryType == pb.EntryType_EntryConfChange {
 				var cc pb.ConfChange
 				cc.Unmarshal(entry.Data)
@@ -165,24 +166,31 @@ func TestRawNodeStart2AC(t *testing.T) {
 		t.Fatal(err)
 	}
 	rawNode.Campaign()
+	log.Debugf("ready 1")
 	rd := rawNode.Ready()
-	fmt.Printf("ready 1 %+v \n",rd.Entries)
-	storage.Append(rd.Entries)
+	log.Debugf("ready %v", rd.String())
+	storage.Append(rd.UnStableEntry)
+	log.Debugf("advance first")
 	rawNode.Advance(rd)
 
+	log.Debugf("propose first")
 	rawNode.Propose([]byte("foo"))
-	rd = rawNode.Ready()
-	fmt.Printf("ready 2 %+v \n c entry %+v\n",rd.Entries,rd.CommittedEntries)
 
-	if el := len(rd.Entries); el != len(rd.CommittedEntries) || el != 1 {
-		t.Errorf("got len(Entries): %+v, len(CommittedEntries): %+v, want %+v", el, len(rd.CommittedEntries), 1)
+	rd = rawNode.Ready()
+	log.Debugf("ready 2 %s", rd.String())
+
+	if len(rd.UnStableEntry) != 1 || len(rd.UnApplyEntry) != 1 {
+		t.Errorf("got len(Entries): %+v, len(CommittedEntries): %+v, want %+v", len(rd.UnStableEntry), len(rd.UnApplyEntry), 1)
 	}
-	if !reflect.DeepEqual(rd.Entries[0].Data, rd.CommittedEntries[0].Data) || !reflect.DeepEqual(rd.Entries[0].Data, []byte("foo")) {
-		t.Errorf("got %+v %+v , want %+v", rd.Entries[0].Data, rd.CommittedEntries[0].Data, []byte("foo"))
+	if !reflect.DeepEqual(rd.UnStableEntry[0].Data, rd.UnApplyEntry[0].Data) || !reflect.DeepEqual(rd.UnStableEntry[0].Data, []byte("foo")) {
+		t.Errorf("got %+v %+v , want %+v", rd.UnStableEntry[0].Data, rd.UnApplyEntry[0].Data, []byte("foo"))
 	}
-	storage.Append(rd.Entries)
+	storage.Append(rd.UnStableEntry)
+
+	log.Debugf("advance again")
 	rawNode.Advance(rd)
 
+	log.Debugf("check ready")
 	if rawNode.HasReady() {
 		t.Errorf("unexpected Ready: %+v", rawNode.Ready())
 	}
@@ -194,13 +202,12 @@ func TestRawNodeRestart2AC(t *testing.T) {
 		{Term: 1, Index: 2, Data: []byte("foo")},
 	}
 	st := pb.HardState{Term: 1, Commit: 1}
-
 	want := Ready{
-		Entries: []pb.Entry{},
+		HardState: st,
+		UnStableEntry: []pb.Entry{},
 		// commit up to commit index in st
-		CommittedEntries: entries[:st.Commit],
+		UnApplyEntry: entries[:st.Commit],
 	}
-fmt.Printf("xxx %v %v\n",entries[:st.Commit],st.Commit)
 	storage := NewMemoryStorage()
 	storage.SetHardState(st)
 	storage.Append(entries)
@@ -208,13 +215,21 @@ fmt.Printf("xxx %v %v\n",entries[:st.Commit],st.Commit)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fmt.Printf("first ready\n")
 	rd := rawNode.Ready()
 	if !reflect.DeepEqual(rd, want) {
-		t.Errorf("g = %+v,\n                   			w   %+v", rd, want)
+		t.Logf("not deep equal")
+		t.Errorf("\ng = %s,\nw = %s", rd.String(), want.String())
+		t.Errorf("\ng = %#v,\nw = %#v", rd, want)
+		return
 	}
+	t.Logf("first advance")
 	rawNode.Advance(rd)
+	t.Logf("check hasReady")
 	if rawNode.HasReady() {
-		t.Errorf("unexpected Ready: %+v", rawNode.Ready())
+		rd := rawNode.Ready()
+		t.Errorf("unexpected Ready: %s", rd.String())
+		return
 	}
 }
 
@@ -232,9 +247,9 @@ func TestRawNodeRestartFromSnapshot2C(t *testing.T) {
 	st := pb.HardState{Term: 1, Commit: 3}
 
 	want := Ready{
-		Entries: []pb.Entry{},
+		UnStableEntry: []pb.Entry{},
 		// commit up to commit index in st
-		CommittedEntries: entries,
+		UnApplyEntry: entries,
 	}
 
 	s := NewMemoryStorage()

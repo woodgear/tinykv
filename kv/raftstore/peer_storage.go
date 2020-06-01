@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
+	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
 	"github.com/pingcap-incubator/tinykv/raft"
 	"github.com/pingcap/errors"
@@ -52,7 +53,8 @@ type PeerStorage struct {
 
 // NewPeerStorage get the persist raftState from engines and return a peer storage
 func NewPeerStorage(engines *engine_util.Engines, region *metapb.Region, regionSched chan<- worker.Task, tag string) (*PeerStorage, error) {
-	log.Debugf("%s creating storage for %s", tag, region.String())
+	log.Debugf("NewPeerStoragefor tag %s region %s", tag, util.ShowRegion(region))
+	// 从文件中读取出上次的term vote commit,lastindex lastterm
 	raftState, err := meta.InitRaftLocalState(engines.Raft, region)
 	if err != nil {
 		return nil, err
@@ -208,6 +210,7 @@ func (ps *PeerStorage) checkRange(low, high uint64) error {
 	if low > high {
 		return errors.Errorf("low %d is greater than high %d", low, high)
 	} else if low <= ps.truncatedIndex() {
+		log.Errorf("checkRange fail low %v hight %v truncatedIndex %v", low, high, ps.truncatedIndex())
 		return raft.ErrCompacted
 	} else if high > ps.raftState.LastIndex+1 {
 		return errors.Errorf("entries' high %d is out of bound, lastIndex %d",
@@ -306,6 +309,24 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 // never be committed
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
 	// Your Code Here (2B).
+	if len(entries) != 0 {
+		log.Debugf("peer_storage append len %v", len(entries))
+	}
+
+	if len(entries) != 0 {
+		// TODO why do this here? maybe in SaveReadyState
+		lastEntry := entries[len(entries)-1]
+		ps.raftState.LastIndex = lastEntry.Index
+		ps.raftState.LastTerm = lastEntry.Term
+	}
+
+	//TODO delete overlaped entry in raftdb HOW???
+	// 实际上不用特意去做任何事？
+	for _, e := range entries {
+		key := meta.RaftLogKey(ps.region.GetId(), e.Index)
+		log.Debugf("stable entry  region_id %v idx %v key %v value %v", ps.region.GetId(), e.Index, key, &e)
+		raftWB.SetMeta(key, &e)
+	}
 	return nil
 }
 
@@ -329,7 +350,74 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, error) {
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
+
+	raftWb := new(engine_util.WriteBatch)
+	ps.Append(ready.GetUnStableEntry(), raftWb)
+
+	// TODO question 更新ps.raftState的操作被放到了两个函数中？
+	hardState := ready.HardState
+	ps.raftState.HardState = &hardState
+	// 这里的检查有何意义？
+	if !raft.IsEmptyHardState(hardState) || len(ready.UnStableEntry) != 0 {
+		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), &ps.raftState)
+	}
+	error := ps.Engines.WriteRaft(raftWb)
+	if error != nil {
+		return nil, error
+	}
+	// ps.ApplySnapshot(&ready.Snapshot,wb)
 	return nil, nil
+}
+
+func (ps *PeerStorage) ProcessRequest(reqs raft_cmdpb.RaftCmdRequest) (*raft_cmdpb.RaftCmdResponse, error) {
+	resp := new(raft_cmdpb.RaftCmdResponse)
+	resp.Header = new(raft_cmdpb.RaftResponseHeader)
+	resp.Responses = []*raft_cmdpb.Response{}
+
+	for _, req := range reqs.Requests {
+		switch req.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			{
+				getReq := req.Get
+				getResp := new(raft_cmdpb.GetResponse)
+				val, errror := engine_util.GetCF(ps.Engines.Kv, getReq.Cf, getReq.Key)
+				if errror != nil {
+					return nil, errror
+				}
+				getResp.Value = val
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Get, Get: getResp})
+			}
+		case raft_cmdpb.CmdType_Delete:
+			{
+				deleteReq := req.Delete
+				deleteResp := new(raft_cmdpb.DeleteResponse)
+				errror := engine_util.DeleteCF(ps.Engines.Kv, deleteReq.Cf, deleteReq.Key)
+				if errror != nil {
+					return nil, errror
+				}
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Delete, Delete: deleteResp})
+
+			}
+		case raft_cmdpb.CmdType_Snap:
+			{
+				// snap req的返回值实际使用的是挂在cb上的txn
+				snapResp := new(raft_cmdpb.SnapResponse)
+				snapResp.Region = ps.region
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Snap, Snap: snapResp})
+			}
+		case raft_cmdpb.CmdType_Put:
+			{
+				putReq := req.Put
+				putResp := new(raft_cmdpb.PutResponse)
+				errror := engine_util.PutCF(ps.Engines.Kv, putReq.Cf, putReq.Key, putReq.Value)
+				if errror != nil {
+					return nil, errror
+				}
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Put, Put: putResp})
+			}
+		}
+	}
+	return resp, nil
 }
 
 func (ps *PeerStorage) ClearData() {
