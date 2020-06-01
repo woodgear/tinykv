@@ -38,8 +38,7 @@ func newTestPeerStorageFromEnts(t *testing.T, ents []eraftpb.Entry) *PeerStorage
 		Term:  ents[0].Term,
 	}
 	applyState.AppliedIndex = ents[len(ents)-1].Index
-	peerStore.applyState = applyState
-	kvWB.SetMeta(meta.ApplyStateKey(peerStore.region.GetId()), &applyState)
+	kvWB.SetMeta(meta.ApplyStateKey(peerStore.region.GetId()), applyState)
 	require.Nil(t, peerStore.Engines.WriteRaft(raftWB))
 	peerStore.Engines.WriteKV(kvWB)
 	return peerStore
@@ -89,7 +88,7 @@ func TestPeerStorageTerm2B(t *testing.T) {
 func appendEnts(t *testing.T, peerStore *PeerStorage, ents []eraftpb.Entry) {
 	raftWB := new(engine_util.WriteBatch)
 	require.Nil(t, peerStore.Append(ents, raftWB))
-	raftWB.SetMeta(meta.RaftStateKey(peerStore.region.GetId()), &peerStore.raftState)
+	raftWB.SetMeta(meta.RaftStateKey(peerStore.region.GetId()), peerStore.raftState)
 	require.Nil(t, peerStore.Engines.WriteRaft(raftWB))
 }
 
