@@ -388,6 +388,7 @@ func TestLeaderStartReplication2AB(t *testing.T) {
 	if !reflect.DeepEqual(msgs, wmsgs) {
 		t.Errorf("msgs = %+v, want %+v", msgs, wmsgs)
 	}
+	t.Logf("get unstableEntries")
 	if g := r.RaftLog.unstableEntries(); !reflect.DeepEqual(g, wents) {
 		t.Errorf("ents = %+v, want %+v", g, wents)
 	}

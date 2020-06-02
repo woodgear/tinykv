@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/pingcap-incubator/tinykv/log"
@@ -28,6 +29,8 @@ import (
 //                            log entries
 //
 // for simplify the RaftLog implement should manage all log entries
+// TODO 一个有趣的问题在于 first applied commited stable 的定义是什么,是否需要+1,当GetEntry（Commit）返回的是最后一个Commit的Entry 还是第一个uncommit的Entry
+// 我使用的定义是前者
 // that not truncated
 type RaftLog struct {
 	// storage contains all stable entries since the last snapshot.
@@ -121,15 +124,44 @@ func (l *RaftLog) GetTerm(index uint64) uint64 {
 	return l.GetEntry(index).Term
 }
 
-func (l *RaftLog) GetEntry(index uint64) *pb.Entry {
-	//TODO ????????
-	if index == 0 {
-		return &pb.Entry{}
+func (l *RaftLog) isValidIndex(index uint64) error {
+	realIndex := index - l.offset
+	if realIndex >= 0 && realIndex < uint64(len(l.entries)) {
+		return nil
 	}
-	if index == l.initIndex {
+	return errors.New(fmt.Sprintf("invalid index %v offset %v len %v", index, l.offset, len(l.entries)))
+}
 
+// Entryies from raftlog if low or hight not in range it will panic
+// 将raftlog 视为数组
+func (l *RaftLog) Entries(low, hight uint64) []pb.Entry {
+	log.Debugf("get entries %v %v", low, hight)
+	if low > hight {
+		panic(errors.New(fmt.Sprintf("Entries low>hight %v %v fail", low, hight)))
 	}
-	return &l.entries[index-l.offset]
+	if low == hight {
+		return []pb.Entry{}
+	}
+	if err := l.isValidIndex(low); err != nil {
+		panic(err)
+	}
+	if err := l.isValidIndex(hight - 1); err != nil {
+		panic(err)
+	}
+	entries := []pb.Entry{}
+	for index := low; index < hight; index++ {
+		entries = append(entries, *l.GetEntry(index))
+	}
+	return entries
+}
+
+func (l *RaftLog) GetEntry(index uint64) *pb.Entry {
+	// TODO duplicate check??
+	if err := l.isValidIndex(index); err != nil {
+		panic(err)
+	}
+	realIndex := index - l.offset
+	return &l.entries[realIndex]
 }
 
 // log中是否为空 （初始化时）
@@ -175,16 +207,7 @@ func (l *RaftLog) MetaString() string {
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	entries := []pb.Entry{}
-
-	for index := l.stabled + 1; index <= l.LastIndex(); index++ {
-		entry := l.GetEntry(index)
-		if entry == nil {
-			panic("err find a nil entry")
-		}
-		entries = append(entries, *entry)
-	}
-	return entries
+	return l.Entries(l.stabled+1, l.LastIndex()+1)
 }
 
 // nextEnts returns all the committed but not applied entries
@@ -193,21 +216,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 }
 
 func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
-	entries := []pb.Entry{}
-
-	// TODO need explain or better code
-	if len(l.entries) == 0 {
-		return entries
-	}
-
-	for index := l.applied + 1; index <= l.committed; index++ {
-		entry := l.GetEntry(index)
-		if entry == nil {
-			panic("err find a nil entry")
-		}
-		entries = append(entries, *entry)
-	}
-	return entries
+	return l.Entries(l.applied+1, l.committed+1)
 }
 
 // Term return the term of the entry in the given index

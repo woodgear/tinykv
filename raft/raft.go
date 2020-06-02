@@ -415,6 +415,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		return false
 	}
 	entries := []*pb.Entry{}
+	// 在这种场景下根本就不是GetEntry 而是Entries
 	for index := next; index <= lastIndex; index++ {
 		entry := r.GetEntry(index)
 		entries = append(entries, entry)
