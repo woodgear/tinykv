@@ -77,6 +77,7 @@ func TestPeerStorageTerm2B(t *testing.T) {
 		log.Debugf("peerStore apply %v", peerStore.applyState)
 		term, err := peerStore.Term(tt.idx)
 		if err != nil {
+			log.Debugf("it should error")
 			assert.Equal(t, tt.err, err)
 		} else {
 			assert.Equal(t, tt.term, term)
@@ -186,6 +187,7 @@ func TestPeerStorageEntries(t *testing.T) {
 		defer cleanUpTestData(peerStore)
 		entries, err := peerStore.Entries(tt.low, tt.high)
 		if err != nil {
+			log.Debugf("it should error")
 			assert.Equal(t, tt.err, err)
 		} else {
 			assert.Equal(t, tt.entries, entries, "%d", i)

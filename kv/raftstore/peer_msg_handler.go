@@ -172,10 +172,13 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	}
 	log.Debugf("raft_id: %v, log: 2B=> proprose data %v ", d.Meta.GetId(), data)
 	d.RaftGroup.Propose(data)
-	lastIndex := d.RaftGroup.Raft.GetLastIndex() // TODO 绝对很奇怪
-	lastEntry := d.RaftGroup.Raft.GetEntry(lastIndex)
-	log.Debugf("raft_id: %v, log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastEntry.Index, lastEntry.Term)
-	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastEntry.Index, term: lastEntry.Term, cb: cb})
+	lastIndex := d.RaftGroup.Raft.RaftLog.LastIndex() // TODO 绝对很奇怪
+	lastTerm, error := d.RaftGroup.Raft.RaftLog.Term(lastIndex)
+	if error != nil {
+		panic(error)
+	}
+	log.Debugf("raft_id: %v, log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastIndex, lastTerm)
+	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastIndex, term: lastTerm, cb: cb})
 }
 
 func (d *peerMsgHandler) onTick() {

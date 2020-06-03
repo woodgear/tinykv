@@ -118,10 +118,11 @@ func (l *RaftLog) LastIndex() uint64 {
 }
 
 func (l *RaftLog) GetTerm(index uint64) uint64 {
-	if index == l.initIndex {
-		return l.initTerm
+	term, err := l.Term(index)
+	if err != nil {
+		panic(err)
 	}
-	return l.GetEntry(index).Term
+	return term
 }
 
 func (l *RaftLog) isValidIndex(index uint64) error {
@@ -132,12 +133,12 @@ func (l *RaftLog) isValidIndex(index uint64) error {
 	return errors.New(fmt.Sprintf("invalid index %v offset %v len %v", index, l.offset, len(l.entries)))
 }
 
-// Entryies from raftlog if low or hight not in range it will panic
+// Entries from raftlog if low or hight not in range it will panic
 // 将raftlog 视为数组
 func (l *RaftLog) Entries(low, hight uint64) []pb.Entry {
 	log.Debugf("get entries %v %v", low, hight)
 	if low > hight {
-		panic(errors.New(fmt.Sprintf("Entries low>hight %v %v fail", low, hight)))
+		panic(fmt.Errorf("Entries low>hight %v %v fail", low, hight))
 	}
 	if low == hight {
 		return []pb.Entry{}
@@ -150,16 +151,22 @@ func (l *RaftLog) Entries(low, hight uint64) []pb.Entry {
 	}
 	entries := []pb.Entry{}
 	for index := low; index < hight; index++ {
-		entries = append(entries, *l.GetEntry(index))
+		entries = append(entries, *l.getEntry(index))
 	}
 	return entries
 }
 
-func (l *RaftLog) GetEntry(index uint64) *pb.Entry {
-	// TODO duplicate check??
-	if err := l.isValidIndex(index); err != nil {
-		panic(err)
+// PtrEntries same as Entries but return []*pb.Entry instead of []pb.Entry
+func (l *RaftLog) PtrEntries(low, hight uint64) []*pb.Entry {
+	entries := l.Entries(low, hight)
+	ptrEntries := []*pb.Entry{}
+	for i, _ := range entries {
+		ptrEntries = append(ptrEntries, &entries[i])
 	}
+	return ptrEntries
+}
+
+func (l *RaftLog) getEntry(index uint64) *pb.Entry {
 	realIndex := index - l.offset
 	return &l.entries[realIndex]
 }
@@ -216,17 +223,21 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 }
 
 func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
+	// all of commited entry include the last commit entry
 	return l.Entries(l.applied+1, l.committed+1)
 }
 
 // Term return the term of the entry in the given index
+// TODO when term will error???
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	if i == l.initIndex {
 		return l.initTerm, nil
 	}
-	entry := l.GetEntry(i)
-	return entry.Term, nil
 
+	if err := l.isValidIndex(i); err != nil {
+		return 0, err
+	}
+	return l.entries[i-l.offset].Term, nil
 }
 
 func (l *RaftLog) Append(e pb.Entry) {

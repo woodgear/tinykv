@@ -405,7 +405,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	lastIndex := r.GetLastIndex()
 	log.Debugf("raft_id: %v sendAppend to %v lastIndex %v next %v", r.id, to, lastIndex, next)
 	if next > lastIndex {
-		log.Debugf("empty append??? maybe to update commit")
+		log.Warnf("empty append??? maybe to update commit")
 	}
 	// could not find entry
 	// TODO some werid
@@ -414,20 +414,13 @@ func (r *Raft) sendAppend(to uint64) bool {
 		log.Warnf("is this normal????")
 		return false
 	}
-	entries := []*pb.Entry{}
-	// 在这种场景下根本就不是GetEntry 而是Entries
-	for index := next; index <= lastIndex; index++ {
-		entry := r.GetEntry(index)
-		entries = append(entries, entry)
-	}
-
+	entries := r.RaftLog.PtrEntries(next, lastIndex+1)
 	preLogIndex := next - 1
-	// TODO
+
 	preLogTerm, error := r.RaftLog.Term(preLogIndex)
 	if error != nil {
 		panic(error)
 	}
-
 	log.Debugf("raft_id: %v sendAppend to %v follower match %v next %v lastIndex %v len %v preLogIndex %v preLogTerm %v", r.id, to, match, next, lastIndex, len(entries), preLogIndex, preLogTerm)
 	r.sendAppendToFollower(AppendEntriesRequest{
 		Term:         r.Term,
@@ -448,7 +441,9 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 	entries := m.Entries
 	preLogIndex := m.PrevLogIndex
 	preLogTerm := m.PrevLogTerm
-
+	if len(entries) > 1 {
+		log.Warnf("followerHandleMsgAppend entries >1")
+	}
 	log.Debugf("raft_id: %v, tag:GenericTest , log: im follower leader is %v handle append entry preLogIndex %v preLogTerm %v entries len %v entries %s", r.id, r.Lead, m.PrevLogIndex, m.PrevLogTerm, len(m.Entries), ShowPtrEntries(entries))
 	//TODO ? check error type
 	lastNewEntryIndex, err := r.RaftLog.tryAppendEntries(preLogIndex, preLogTerm, entries)
@@ -724,11 +719,6 @@ func (r *Raft) sendAppendToFollower(msg AppendEntriesRequest) {
 	r.send(msg.ToPb())
 }
 
-// TODO some werid
-func (r *Raft) GetEntry(index uint64) *pb.Entry {
-	return r.RaftLog.GetEntry(index)
-
-}
 func (r *Raft) GetLastIndex() uint64 {
 	return r.RaftLog.LastIndex()
 }

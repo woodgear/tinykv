@@ -156,7 +156,7 @@ func ShowMsgs(msgs []pb.Message) string {
 }
 
 func ShowEntry(e pb.Entry) string {
-	return fmt.Sprintf("Entry {index: %v, term: %v, data:%v }", e.Index, e.Term, e.Data)
+	return fmt.Sprintf("Entry {index: %v, term: %v, data-len:%v }", e.Index, e.Term, len(e.Data))
 }
 
 func ShowEntries(ents []pb.Entry) string {

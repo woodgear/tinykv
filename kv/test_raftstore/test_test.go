@@ -154,7 +154,7 @@ func TestSimpleCluster2B(t *testing.T) {
 
 	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
 	time.Sleep(10 * electionTimeout)
-	
+
 	log.Debugf("TestSimpleCluster put %v", []byte("key1"))
 	cluster.MustPut([]byte("key1"), []byte("val1"))
 
