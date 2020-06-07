@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
-	_ "net/http/pprof"
 	"os"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,9 @@ import (
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	"github.com/stretchr/testify/assert"
+
+	"net/http"
+	_ "net/http/pprof"
 )
 
 // a client runs the function f and then signals it is done
@@ -146,6 +150,13 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 }
 
 func TestSimpleCluster2B(t *testing.T) {
+
+	// dbs := []*badger.DB{}
+	// for i := 0; i < 6; i++ {
+	// 	db := engine_util.CreateDB(fmt.Sprintf("raft-%v", i), cfg)
+	// 	dbs = append(dbs, db)
+	// }
+
 	nservers := 3
 	cfg := config.NewTestConfig()
 	cluster := NewTestCluster(nservers, cfg)
@@ -153,14 +164,52 @@ func TestSimpleCluster2B(t *testing.T) {
 	defer cluster.Shutdown()
 
 	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
-	time.Sleep(10 * electionTimeout)
+	time.Sleep(2 * electionTimeout)
 
-	log.Debugf("TestSimpleCluster put %v", []byte("key1"))
-	cluster.MustPut([]byte("key1"), []byte("val1"))
+	for i := 0; i < 100; i++ {
+		log.Debugf("TestSimpleCluster put %v", []byte("key1"))
+		cluster.MustPut([]byte("key1"), []byte("val1"))
 
-	resp := cluster.Get([]byte("key1"))
-	if !bytes.Equal(resp, []byte("val1")) {
-		t.Errorf("could not get puted value")
+		resp := cluster.Get([]byte("key1"))
+		if !bytes.Equal(resp, []byte("val1")) {
+			t.Errorf("could not get puted value")
+		}
+	}
+	// }
+	// profile()
+}
+
+func profile() {
+	f, err := os.Create("/mnt/sm/lab/tinykv/memprofile")
+	if err != nil {
+		panic("xxx")
+		log.Fatal("could not create memory profile: ", err)
+	}
+	defer f.Close()
+	runtime.GC() // get up-to-date statistics
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		panic("xx")
+		log.Fatal("could not write memory profile: ", err)
+	}
+}
+
+func TestWriteFile(t *testing.T) {
+	dbs := []*badger.DB{}
+	c := make(chan int)
+
+	for i := 0; i < 6; i++ {
+		cfg := config.NewTestConfig()
+		db := engine_util.CreateDB(fmt.Sprintf("raft-%v", i), cfg)
+		dbs = append(dbs, db)
+		go func(db *badger.DB, c chan int) {
+			for j := 0; j < 1000000; j++ {
+				engine_util.PutCF(db, "xxxxxxxxxxxx", []byte("kkkkkkkkkkkkkkkk"), []byte("bbbbbbbbbbbbbbbbb"))
+			}
+			c <- 0
+		}(db, c)
+	}
+	for i := 0; i < 6; i++ {
+		<-c
 	}
 }
 
@@ -176,7 +225,9 @@ func TestSimpleCluster2B(t *testing.T) {
 // - If split is set, split region when size exceed 1024 bytes.
 func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash bool, partitions bool, maxraftlog int, confchange bool, split bool) {
 	log.Debugf("tag:time,GenericTest log: start")
-
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 	title := "Test: "
 	if unreliable {
 		// the network drops RPC requests and replies.
@@ -372,7 +423,33 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 				t.Fatalf("region is not split")
 			}
 		}
+
 	}
+}
+func TestAllInOne(t *testing.T) {
+
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
+	TestSimpleCluster2B(t)
+	log.Debugf("PASS TestSimpleCluster2B")
+	time.Sleep(3*1000)
+	TestBasic2B(t)
+	log.Debugf("PASS TestBasic2B")
+	time.Sleep(3*1000)
+	TestConcurrent2B(t)
+	log.Debugf("PASS TestConcurrent2B")
+
+	// TestUnreliable2B(t)
+	// TestOnePartition2B(t)
+	// TestManyPartitionsOneClient2B(t)
+	// TestManyPartitionsManyClients2B(t)
+	// TestPersistOneClient2B(t)
+	// TestPersistConcurrent2B(t)
+	// TestPersistConcurrentUnreliable2B(t)
+	// TestPersistPartition2B(t)
+	// TestPersistPartitionUnreliable2B(t)
 }
 
 func TestBasic2B(t *testing.T) {

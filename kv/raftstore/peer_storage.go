@@ -369,15 +369,17 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	return nil, nil
 }
 
-func (ps *PeerStorage) ProcessRequest(reqs raft_cmdpb.RaftCmdRequest) (*raft_cmdpb.RaftCmdResponse, error) {
+func (ps *PeerStorage) ProcessRequest(reqs raft_cmdpb.RaftCmdRequest, isLeader bool) (*raft_cmdpb.RaftCmdResponse, error) {
 	resp := new(raft_cmdpb.RaftCmdResponse)
 	resp.Header = new(raft_cmdpb.RaftResponseHeader)
 	resp.Responses = []*raft_cmdpb.Response{}
-
 	for _, req := range reqs.Requests {
 		switch req.CmdType {
 		case raft_cmdpb.CmdType_Get:
 			{
+				if !isLeader {
+					return nil, nil
+				}
 				getReq := req.Get
 				getResp := new(raft_cmdpb.GetResponse)
 				val, errror := engine_util.GetCF(ps.Engines.Kv, getReq.Cf, getReq.Key)
@@ -400,6 +402,10 @@ func (ps *PeerStorage) ProcessRequest(reqs raft_cmdpb.RaftCmdRequest) (*raft_cmd
 			}
 		case raft_cmdpb.CmdType_Snap:
 			{
+
+				if !isLeader {
+					return nil, nil
+				}
 				// snap req的返回值实际使用的是挂在cb上的txn
 				snapResp := new(raft_cmdpb.SnapResponse)
 				snapResp.Region = ps.region

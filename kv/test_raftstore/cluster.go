@@ -79,7 +79,6 @@ func (c *Cluster) Start() {
 		if err != nil {
 			panic(err)
 		}
-
 		raftDB := engine_util.CreateDB("raft", c.cfg)
 		kvDB := engine_util.CreateDB("kv", c.cfg)
 		engine := engine_util.NewEngines(kvDB, raftDB, kvPath, raftPath)
@@ -147,6 +146,7 @@ func (c *Cluster) Shutdown() {
 		engine.Close()
 	}
 	for _, dir := range c.dirs {
+		log.Debugf("tag:life log: remove all dir %v",dir)
 		os.RemoveAll(dir)
 	}
 }

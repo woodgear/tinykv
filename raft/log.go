@@ -309,10 +309,10 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 	serverEntriesLastIndex := serverEntries[len(serverEntries)-1].Index
 	// 2. follower的Entries完全包含了server发过来的Entries
 	if hasConflict == false && serverEntriesLastIndex <= l.LastIndex() {
-		log.Warnf("tryAppendEntries: conflict false log = flog\n")
+		log.Debugf("tryAppendEntries: conflict false log = flog\n")
 	} else if hasConflict == false && serverEntriesLastIndex > l.LastIndex() {
 		// 2. serverlog与follower entries不冲突 且存在交集
-		log.Warnf("tryAppendEntries: conflict false log = slog + part of flog\n")
+		log.Debugf("tryAppendEntries: conflict false log = slog + part of flog\n")
 		l.entries = append(l.entries, serverEntries[serverSamedIndex+1:]...)
 	} else {
 		// 3. entries冲突

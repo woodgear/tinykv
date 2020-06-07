@@ -49,7 +49,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		ready := d.RaftGroup.Ready()
 		log.Debugf("raft_id: %v, tag: GenericTest , log: HandleRaftReady Ready 2B=> %s ready %s", d.Meta.GetId(), d.RaftGroup.Raft.RaftLog.MetaString(), ready.String())
 		// save to storage
-		d.peerStorage.SaveReadyState(&ready)
+	    d.peerStorage.SaveReadyState(&ready)
 		// send msgs
 		msgs := ready.Messages
 		log.Debugf("raft_id: %v, log: HandleRaftReady send msgs %+v", d.Meta.GetId(), len(msgs))
@@ -70,21 +70,30 @@ func (d *peerMsgHandler) HandleRaftReady() {
 				panic(error)
 			}
 			log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", d.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
-			resp, error := d.peerStorage.ProcessRequest(cmd)
+			resp, error := d.peerStorage.ProcessRequest(cmd,d.IsLeader())
 			if error != nil {
 				panic(error)
 			}
-			// TODO 这里一直在调用d的field的方法感觉很怪
-			log.Infof("raft_id:%v find proposal index %v term %v", d.Meta.GetId(), e.Index, e.Term)
-			proposalIndex, find := d.peer.findProposalIndex(e.Index, e.Term)
-			// TODO 在什么情况下为找不到？
-			if find {
-				d.proposals[proposalIndex].cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
-				d.proposals[proposalIndex].cb.Done(resp)
-				// TODO is this the correct way to delete element in  golang?
-				// proposal 如果是顺序的话 那么可以直接更新proposals 这样应该才是正确的做法
-				d.proposals[proposalIndex] = nil
+			if !d.IsLeader() {
+				continue
 			}
+			if e.Term != ready.Term {
+				log.Debugf("raft_id:%v tag:proposal,log: proposal term %v not eq ready term %v", d.Meta.GetId(), e.Term, ready.Term)
+				continue
+			}
+			// TODO 这里一直在调用d的field的方法感觉很怪
+			log.Debugf("raft_id:%v tag: proposal log: find proposal len %v index  %v term %v", d.Meta.GetId(), len(d.peer.proposals), e.Index, e.Term)
+			// TODO 在什么情况下清理 proposal??
+			proposalIndex, find := d.peer.findProposalIndex(e.Index, e.Term)
+			if !find {
+				log.Debugf("raft_id: %v not find proposal index??", d.Meta.GetId())
+				panic("not find proposal index??")
+			}
+			log.Debugf("find result %v %v", proposalIndex, find)
+			d.proposals[proposalIndex].cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
+			d.proposals[proposalIndex].cb.Done(resp)
+			d.proposals = d.proposals[proposalIndex+1:]
+
 		}
 
 		log.Debugf("raft_id:%v, log: time to advace", d.Meta.GetId())
@@ -158,6 +167,7 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 }
 
 // TODO 对查询做优化
+// 只有leader 会收到propose 只有leader会维护 response
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	log.Debugf("raft_id:%v, log: GenericTest 2B=> proposeRaftCommand", d.peer.Meta.GetId())
 	err := d.preProposeRaftCommand(msg)
@@ -177,7 +187,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	if error != nil {
 		panic(error)
 	}
-	log.Debugf("raft_id: %v, log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastIndex, lastTerm)
+	log.Debugf("raft_id: %v, tag: proposal log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastIndex, lastTerm)
 	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastIndex, term: lastTerm, cb: cb})
 }
 

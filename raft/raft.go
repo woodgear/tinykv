@@ -405,7 +405,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	lastIndex := r.GetLastIndex()
 	log.Debugf("raft_id: %v sendAppend to %v lastIndex %v next %v", r.id, to, lastIndex, next)
 	if next > lastIndex {
-		log.Warnf("empty append??? maybe to update commit")
+		log.Debugf("empty append??? maybe to update commit")
 	}
 	// could not find entry
 	// TODO some werid
@@ -442,7 +442,7 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 	preLogIndex := m.PrevLogIndex
 	preLogTerm := m.PrevLogTerm
 	if len(entries) > 1 {
-		log.Warnf("followerHandleMsgAppend entries >1")
+		log.Debugf("followerHandleMsgAppend entries >1")
 	}
 	log.Debugf("raft_id: %v, tag:GenericTest , log: im follower leader is %v handle append entry preLogIndex %v preLogTerm %v entries len %v entries %s", r.id, r.Lead, m.PrevLogIndex, m.PrevLogTerm, len(m.Entries), ShowPtrEntries(entries))
 	//TODO ? check error type
@@ -602,10 +602,10 @@ func (r *Raft) candidateHandleRequestVoteResponse(m *RequestVoteResponse) {
 		log.Debugf("raft_id: %v ,tag: GenericTest ,log: win the election", r.id)
 		r.winTheElection()
 	case VoteLose:
-		log.Debugf("election lose")
+		log.Debugf("raft_id: %v election lose", r.id)
 		r.becomeFollower(r.Term, r.Lead)
 	case VoteNotYet:
-		log.Debugf("election not yet")
+		log.Debugf("raft_id: %v tag: election, log: election not yet", r.id)
 	}
 }
 
@@ -675,7 +675,7 @@ func (r *Raft) becomeCandidate() {
 }
 
 func (r *Raft) becomeLeader() {
-	log.Debugf("raft_id: %v 2B=> becomeLeader append entry lastindex %v term %v", r.id, r.GetLastIndex(), r.Term)
+	log.Debugf("raft_id: %v ,tag: election log: 2B=> becomeLeader append entry lastindex %v term %v", r.id, r.GetLastIndex(), r.Term)
 
 	r.State = StateLeader
 	// append a empty entries to help commit
