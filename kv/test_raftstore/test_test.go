@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"runtime"
-	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -120,7 +118,7 @@ func partitioner(t *testing.T, cluster *Cluster, ch chan bool, done *int32, unre
 			}
 		}
 		cluster.ClearFilters()
-		log.Infof("partition: %v, %v", pa[0], pa[1])
+		log.Infof("tag: life partition: %v, %v", pa[0], pa[1])
 		cluster.AddFilter(&PartitionFilter{
 			s1: pa[0],
 			s2: pa[1],
@@ -151,12 +149,6 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 
 func TestSimpleCluster2B(t *testing.T) {
 
-	// dbs := []*badger.DB{}
-	// for i := 0; i < 6; i++ {
-	// 	db := engine_util.CreateDB(fmt.Sprintf("raft-%v", i), cfg)
-	// 	dbs = append(dbs, db)
-	// }
-
 	nservers := 3
 	cfg := config.NewTestConfig()
 	cluster := NewTestCluster(nservers, cfg)
@@ -168,48 +160,15 @@ func TestSimpleCluster2B(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		log.Debugf("TestSimpleCluster put %v", []byte("key1"))
-		cluster.MustPut([]byte("key1"), []byte("val1"))
+		key := fmt.Sprintf("key-%v", i)
+		val := fmt.Sprintf("val-%v", i)
 
-		resp := cluster.Get([]byte("key1"))
-		if !bytes.Equal(resp, []byte("val1")) {
+		cluster.MustPut([]byte(key), []byte(val))
+
+		resp := cluster.Get([]byte(key))
+		if !bytes.Equal(resp, []byte(val)) {
 			t.Errorf("could not get puted value")
 		}
-	}
-	// }
-	// profile()
-}
-
-func profile() {
-	f, err := os.Create("/mnt/sm/lab/tinykv/memprofile")
-	if err != nil {
-		panic("xxx")
-		log.Fatal("could not create memory profile: ", err)
-	}
-	defer f.Close()
-	runtime.GC() // get up-to-date statistics
-	if err := pprof.WriteHeapProfile(f); err != nil {
-		panic("xx")
-		log.Fatal("could not write memory profile: ", err)
-	}
-}
-
-func TestWriteFile(t *testing.T) {
-	dbs := []*badger.DB{}
-	c := make(chan int)
-
-	for i := 0; i < 6; i++ {
-		cfg := config.NewTestConfig()
-		db := engine_util.CreateDB(fmt.Sprintf("raft-%v", i), cfg)
-		dbs = append(dbs, db)
-		go func(db *badger.DB, c chan int) {
-			for j := 0; j < 1000000; j++ {
-				engine_util.PutCF(db, "xxxxxxxxxxxx", []byte("kkkkkkkkkkkkkkkk"), []byte("bbbbbbbbbbbbbbbbb"))
-			}
-			c <- 0
-		}(db, c)
-	}
-	for i := 0; i < 6; i++ {
-		<-c
 	}
 }
 
@@ -331,7 +290,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			go confchanger(t, cluster, ch_confchange, &done_confchanger)
 		}
 		time.Sleep(5 * time.Second)
-		log.Debugf("tag:time,GenericTest log: client should stop")
+		log.Debugf("tag: life ,GenericTest log: client should stop")
 		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 		atomic.StoreInt32(&done_confchanger, 1) // tell confchanger to quit
@@ -368,7 +327,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		for cli := 0; cli < nclients; cli++ {
 			j := <-clnts[cli]
 
-			log.Debugf("debug=> tag: time read from clients %d j %v\n", cli, j)
+			log.Debugf("debug=> tag: life read from clients %d j %v\n", cli, j)
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
@@ -425,21 +384,24 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		}
 
 	}
+	log.Debugf("tag: count success")
 }
 func TestAllInOne(t *testing.T) {
 
 	go func() {
 		http.ListenAndServe("localhost:6060", nil)
 	}()
-
-	TestSimpleCluster2B(t)
-	log.Debugf("PASS TestSimpleCluster2B")
-	time.Sleep(3*1000)
-	TestBasic2B(t)
-	log.Debugf("PASS TestBasic2B")
-	time.Sleep(3*1000)
-	TestConcurrent2B(t)
-	log.Debugf("PASS TestConcurrent2B")
+	for {
+		TestSimpleCluster2B(t)
+		log.Debugf("should sleep")
+		time.Sleep(time.Minute * 60)
+		// log.Debugf("PASS TestSimpleCluster2B")
+	}
+	// TestBasic2B(t)
+	// log.Debugf("PASS TestBasic2B")
+	// time.Sleep(3*1000)
+	// TestConcurrent2B(t)
+	// log.Debugf("PASS TestConcurrent2B")
 
 	// TestUnreliable2B(t)
 	// TestOnePartition2B(t)

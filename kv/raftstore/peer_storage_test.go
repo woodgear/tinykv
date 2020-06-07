@@ -139,7 +139,7 @@ func getMetaKeyCount(t *testing.T, peerStore *PeerStorage) int {
 	return count
 }
 
-func TestPeerStorageClearMeta(t *testing.T) {
+func TestPeerStorageClearMeta2B(t *testing.T) {
 	peerStore := newTestPeerStorageFromEnts(t, []eraftpb.Entry{
 		newTestEntry(3, 3),
 		newTestEntry(4, 4),
@@ -158,7 +158,7 @@ func TestPeerStorageClearMeta(t *testing.T) {
 	assert.Equal(t, 0, getMetaKeyCount(t, peerStore))
 }
 
-func TestPeerStorageEntries(t *testing.T) {
+func TestPeerStorageEntries2B(t *testing.T) {
 	ents := []eraftpb.Entry{
 		newTestEntry(3, 3),
 		newTestEntry(4, 4),
@@ -195,7 +195,7 @@ func TestPeerStorageEntries(t *testing.T) {
 	}
 }
 
-func TestPeerStorageAppend(t *testing.T) {
+func TestPeerStorageAppend2B(t *testing.T) {
 	ents := []eraftpb.Entry{
 		newTestEntry(3, 3), newTestEntry(4, 4), newTestEntry(5, 5)}
 	tests := []struct {
