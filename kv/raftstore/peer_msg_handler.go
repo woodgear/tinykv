@@ -69,11 +69,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 func (p *peerMsgHandler) ProcessReady(ready raft.Ready) {
 	log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", p.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
 	for _, e := range ready.GetUnApplyEntry() {
-		// TODO ??????
-		if e.Term != ready.Term {
-			log.Debugf("raft_id: %v tag:proposal,log: proposal term %v not eq ready term %v", p.Meta.GetId(), e.Term, ready.Term)
-			continue
-		}
 		// 有些applye的entry是不需要处理的 例如新leader的first entry
 		if len(e.Data) == 0 {
 			continue
@@ -84,7 +79,7 @@ func (p *peerMsgHandler) ProcessReady(ready raft.Ready) {
 		if error != nil {
 			panic(error)
 		}
-		log.Debugf("raft_id: %v,tag: process, log: ProcessRequest index %v cmd %v",p.peer.Meta.GetId(),e.Index,util.ShowRaftCmdRequest(&cmd))
+		log.Debugf("raft_id: %v,tag: process, log: ProcessRequest index %v cmd %v", p.peer.Meta.GetId(), e.Index, util.ShowRaftCmdRequest(&cmd))
 		resp, error := p.ProcessRequest(cmd)
 
 		p.peerStorage.applyState.AppliedIndex = e.Index
@@ -93,21 +88,24 @@ func (p *peerMsgHandler) ProcessReady(ready raft.Ready) {
 		}
 
 		// TODO 这里一直在调用d的field的方法感觉很怪
-		log.Debugf("raft_id: %v tag: proposal log: find proposal len %v index  %v term %v", p.Meta.GetId(), len(p.peer.proposals), e.Index, e.Term)
+		log.Debugf("raft_id: %v, tag: proposal log: find proposal len %v index  %v term %v", p.Meta.GetId(), len(p.peer.proposals), e.Index, e.Term)
 		// TODO 在什么情况下清理 proposal??
 		if p.IsLeader() {
 			proposalIndex, find := p.peer.findProposalIndex(e.Index, e.Term)
+			// 找不到有可能是之前leader的entry
 			if !find {
-				log.Errorf("raft_id: %v,tag:proposal not find proposal index %v %v ??", p.Meta.GetId(), e.Index, e.Term)
-				panic("not find proposal index??")
-			}
-			log.Debugf("find result %v %v", proposalIndex, find)
-			if p.proposals[proposalIndex].cb != nil {
-				p.proposals[proposalIndex].cb.Txn = p.peerStorage.Engines.Kv.NewTransaction(false)
-				p.proposals[proposalIndex].cb.Done(resp)
+				log.Debugf("raft_id: %v,tag:proposal not find proposal index %v %v ??", p.Meta.GetId(), e.Index, e.Term)
+				// panic("not find proposal index??")
+			} else {
+				log.Debugf("find result %v %v", proposalIndex, find)
+				if p.proposals[proposalIndex].cb != nil {
+					p.proposals[proposalIndex].cb.Txn = p.peerStorage.Engines.Kv.NewTransaction(false)
+					p.proposals[proposalIndex].cb.Done(resp)
+				}
+
+				p.proposals = p.proposals[proposalIndex+1:]
 			}
 
-			p.proposals = p.proposals[proposalIndex+1:]
 		}
 
 	}
@@ -126,7 +124,7 @@ func (p *peerMsgHandler) ProcessRequest(cmdReq raft_cmdpb.RaftCmdRequest) (*raft
 	// 			p.peerStorage.applyState.TruncatedState.Index = compactCmd.CompactIndex
 	// 			p.peerStorage.applyState.TruncatedState.Term = compactCmd.CompactTerm
 	// 			p.ScheduleCompactLog(0, compactCmd.CompactIndex)
-	// 			log.Debugf("raft_id: %v tag: snap log: get snap req %v %v %v", p.Meta.GetId(), cmdReq.Header.Peer.Id, compactCmd.CompactIndex, compactCmd.CompactTerm)
+	// 			log.Debugf("raft_id: %v, tag: snap log: get snap req %v %v %v", p.Meta.GetId(), cmdReq.Header.Peer.Id, compactCmd.CompactIndex, compactCmd.CompactTerm)
 	// 		}
 	// 	}
 	// }
@@ -192,7 +190,7 @@ func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	case message.MsgTypeRaftMessage:
 		raftMsg := msg.Data.(*rspb.RaftMessage)
 		if err := d.onRaftMsg(raftMsg); err != nil {
-			log.Errorf("raft_id: %v %s handle raft message error %v", d.peer.Meta.GetId(), d.Tag, err)
+			log.Errorf("raft_id: %v, %s handle raft message error %v", d.peer.Meta.GetId(), d.Tag, err)
 		}
 	// 客户端的propose/ 客户端的请求
 	// raft-server:write->router->raft_worker
@@ -584,7 +582,7 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 	// 	log.Fatalf("appliedIdx: %d, firstIdx: %d, compactIdx: %d", appliedIdx, firstIdx, compactIdx)
 	// 	panic(err)
 	// }
-	// log.Debugf("raft_id: %v tag:snap onRaftGCLogTick %v %v %v %v %v", d.Meta.GetId(),compactIdx, appliedIdx, firstIdx, appliedIdx-firstIdx, d.ctx.cfg.RaftLogGcCountLimit)
+	// log.Debugf("raft_id: %v, tag:snap onRaftGCLogTick %v %v %v %v %v", d.Meta.GetId(),compactIdx, appliedIdx, firstIdx, appliedIdx-firstIdx, d.ctx.cfg.RaftLogGcCountLimit)
 	// // Create a compact log request and notify directly.
 	// regionID := d.regionId
 	// request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)

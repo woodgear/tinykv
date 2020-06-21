@@ -137,7 +137,7 @@ func (rn *RawNode) Campaign() error {
 
 // Propose proposes data be appended to the raft log.
 func (rn *RawNode) Propose(data []byte) error {
-	log.Debugf("raft_id: %v 2B=>  rawnode propose data data len %v", rn.Raft.id, len(data))
+	log.Debugf("raft_id: %v, 2B=>  rawnode propose data data len %v", rn.Raft.id, len(data))
 	ent := pb.Entry{Data: data}
 	return rn.Raft.Step(pb.Message{
 		MsgType: pb.MessageType_MsgPropose,
@@ -217,7 +217,7 @@ func (rn *RawNode) Ready() Ready {
 	curHardState := rn.Raft.hardState()
 
 	unapplyEntries := rn.Raft.RaftLog.unAppliedEntis()
-	log.Debugf("raft_id :%v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries),ShowHardState(curHardState))
+	log.Debugf("raft_id :%v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries), ShowHardState(curHardState))
 	if len(unapplyEntries) != int(rn.Raft.RaftLog.committed-rn.Raft.RaftLog.applied) {
 		panic("xxx len ???")
 	}
@@ -237,18 +237,18 @@ func (rn *RawNode) Ready() Ready {
 func (rn *RawNode) Advance(rd Ready) {
 	// TODO 这个rd 应当与pendingReady是相等的
 	rn.preHardState = rd.HardState
-	log.Debugf("raft_id: %v in advace", rn.Raft.id)
+	log.Debugf("raft_id: %v, in advace", rn.Raft.id)
 	if len(rd.UnStableEntry) > 0 {
 		e := rd.UnStableEntry[len(rd.UnStableEntry)-1]
-		log.Debugf("raft_id: %v tag:commit-apply advance update stable %v", rn.Raft.id, e.Index)
+		log.Debugf("raft_id: %v, tag:commit-apply advance update stable %v", rn.Raft.id, e.Index)
 		rn.Raft.RaftLog.stabled = e.Index
 	}
 
 	if len(rd.UnApplyEntry) > 0 {
 		e := rd.UnApplyEntry[len(rd.UnApplyEntry)-1]
-		log.Debugf("raft_id: %v tag:commit-apply  log 2B=> advance update apply %v", rn.Raft.id, e.Index)
+		log.Debugf("raft_id: %v, tag:commit-apply  log 2B=> advance update apply %v", rn.Raft.id, e.Index)
 		if e.Index > rn.Raft.RaftLog.committed {
-			log.Errorf("raft_id: %v apply %v commit %v", rn.Raft.id, e.Index, rn.Raft.RaftLog.committed)
+			log.Errorf("raft_id: %v, apply %v commit %v", rn.Raft.id, e.Index, rn.Raft.RaftLog.committed)
 			panic("advance apply > commit????")
 		}
 		rn.Raft.RaftLog.applied = e.Index

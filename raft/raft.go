@@ -202,7 +202,7 @@ func newRaft(c *Config) *Raft {
 	//TODO ????
 	raft.RaftLog.committed = hardState.Commit
 
-	log.Debugf("raft_id: %v newRaft log %v", c.ID, raft.RaftLog)
+	log.Debugf("raft_id: %v, newRaft log %v", c.ID, raft.RaftLog)
 
 	raft.State = StateFollower
 	raft.votes = map[uint64]bool{}
@@ -241,7 +241,7 @@ func (r *Raft) tick() {
 	case StateCandidate, StateFollower:
 		{
 			if r.electionElapsed+1 >= r.randomizedElectionTimeout {
-				log.Debugf("raft_id: %v tag: GenericTest log: timeout %v start election", r.id, r.randomizedElectionTimeout)
+				log.Debugf("raft_id: %v, tag: GenericTest log: timeout %v start election", r.id, r.randomizedElectionTimeout)
 				r.Step(pb.Message{From: r.id, To: r.id, MsgType: pb.MessageType_MsgHup})
 			} else {
 				r.electionElapsed++
@@ -266,7 +266,7 @@ func (r *Raft) tick() {
 // 命名规范 xxxHandlexxx 表明只有处于这个state才能处理这个msg 函数内不会对自己的stateo做校验 外部做校验
 // 		   handleXXX    理论上说所有的state都可以处理这个msg 函数内自己处理
 func (r *Raft) Step(m pb.Message) error {
-	log.Debugf("raft_id: %v step %v state %v from %v term %v im %v term %v", r.id, m.MsgType, r.State, m.From, m.Term, r.id, r.Term)
+	log.Debugf("raft_id: %v, step %v state %v from %v term %v im %v term %v", r.id, m.MsgType, r.State, m.From, m.Term, r.id, r.Term)
 	// 首先处理一些内部消息
 	if m.MsgType == pb.MessageType_MsgBeat && r.State == StateLeader {
 		r.leaderHandleMsgBeat()
@@ -303,7 +303,7 @@ func (r *Raft) Step(m pb.Message) error {
 
 		isValidCandidate := func(followerLastIndex uint64, followerLastIndexTerm uint64, msg *RequestVoteRequest) bool {
 			isValid := msg.LastLogTerm > followerLastIndexTerm || (msg.LastLogTerm == followerLastIndexTerm && msg.LastLogIndex >= followerLastIndex)
-			log.Debugf("raft_id: %v ,tag: election, log check candidate valid %v can-log %v can-term %v cur-log %v cur-term %v", r.id, isValid, msg.LastLogIndex, msg.LastLogTerm, followerLastIndex, followerLastIndexTerm)
+			log.Debugf("raft_id: %v,  ,tag: election, log check candidate valid %v can-log %v can-term %v cur-log %v cur-term %v", r.id, isValid, msg.LastLogIndex, msg.LastLogTerm, followerLastIndex, followerLastIndexTerm)
 			return isValid
 		}
 
@@ -315,7 +315,7 @@ func (r *Raft) Step(m pb.Message) error {
 
 		// 在投票前 我们要先将不合格的candidate过滤掉
 		if !isValidCandidate(lastIndex, lastTerm, msg) {
-			log.Debugf("raft_id: %v tag: election, log: reject cause of inconsist log and term from %v im %v", r.id, m.From, r.id)
+			log.Debugf("raft_id: %v, tag: election, log: reject cause of inconsist log and term from %v im %v", r.id, m.From, r.id)
 			r.sendRejectVote(msg.CandidateId)
 			return nil
 		}
@@ -333,11 +333,11 @@ func (r *Raft) Step(m pb.Message) error {
 	if m.MsgType == pb.MessageType_MsgAppend {
 		// 当收到一个同级的msg append时可能是当选的leader发过来的 所以直接变为follower 并且设置leader
 		if m.Term == r.Term && r.Lead != m.From {
-			log.Debugf("raft_id: %v term == me and im not folllowe im %v my id %v his id %v term %v handle append msg", r.id, r.State, r.id, m.From, r.Term)
+			log.Debugf("raft_id: %v, term == me and im not folllowe im %v my id %v his id %v term %v handle append msg", r.id, r.State, r.id, m.From, r.Term)
 			r.becomeFollower(m.Term, m.From)
 		}
 		// 理论上说leader不可能收到一个同级term的append
-		log.Debugf("raft_id: %v my id %v term %v his id %v term %v handle append msg",r.id, r.id, r.Term, m.From, m.Term)
+		log.Debugf("raft_id: %v, my id %v term %v his id %v term %v handle append msg", r.id, r.id, r.Term, m.From, m.Term)
 		if r.State == StateFollower {
 			r.handleAppendEntries(m)
 		}
@@ -408,7 +408,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// match := r.Prs[to].Match
 	next := r.Prs[to].Next
 	lastIndex := r.GetLastIndex()
-	log.Debugf("raft_id: %v sendAppend to %v lastIndex %v next %v", r.id, to, lastIndex, next)
 	if next > lastIndex {
 		log.Debugf("empty append??? maybe to update commit")
 	}
@@ -426,6 +425,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	if error != nil {
 		panic(error)
 	}
+	log.Debugf("raft_id: %v, sendAppend to %v lastIndex %v next %v preLogIndex %v preLoogTerm %v", r.id, to, lastIndex, next, preLogIndex, preLogTerm)
 	r.sendAppendToFollower(AppendEntriesRequest{
 		Term:         r.Term,
 		LeaderID:     r.id,
@@ -446,7 +446,7 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 	preLogIndex := m.PrevLogIndex
 	preLogTerm := m.PrevLogTerm
 	if len(entries) > 1 {
-		log.Debugf("raft_id: %v followerHandleMsgAppend entries >1", r.id)
+		log.Debugf("raft_id: %v, followerHandleMsgAppend entries >1", r.id)
 	}
 	log.Debugf("raft_id: %v, tag:GenericTest , log: im follower leader is %v handle append entry preLogIndex %v preLogTerm %v entries len %v entries %s", r.id, r.Lead, m.PrevLogIndex, m.PrevLogTerm, len(m.Entries), ShowPtrEntries(entries))
 	//TODO ? check error type
@@ -457,11 +457,11 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 		return nil
 	}
 
-	log.Debugf("raft_id: %v follower append entry accept %v", r.id, r.GetLastIndex())
+	log.Debugf("raft_id: %v, follower append entry accept %v", r.id, r.GetLastIndex())
 	r.acceptAppenEntries(leaderID, lastMatchIndex)
 	//leader发来的entries的lastIndex和eladerCommit并不一定是相同的
 	lastIndex := r.GetLastIndex()
-	log.Debugf("raft_id: %v leader is %vleader commit %v cur commit %v lastIndex %v  lastMatchupIndex %v", r.id, leaderID, leaderCommit, r.getCommitedID(), lastIndex, lastMatchIndex)
+	log.Debugf("raft_id: %v, leader is %vleader commit %v cur commit %v lastIndex %v  lastMatchupIndex %v", r.id, leaderID, leaderCommit, r.getCommitedID(), lastIndex, lastMatchIndex)
 
 	// TestHandleMessageType_MsgAppend2AB
 	shouldCommit := min(leaderCommit, lastMatchIndex)
@@ -474,7 +474,7 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 
 func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 	if m.Reject {
-		log.Debugf("raft_id: %v tag:GenericTest log: handleAppendResponse append reject follower is %v follower lastindex is %v", r.id, m.From, m.Index)
+		log.Debugf("raft_id: %v, tag:GenericTest log: handleAppendResponse append reject follower is %v follower lastindex is %v", r.id, m.From, m.Index)
 		// TODO better
 		if r.Prs[m.From].Next > m.Index && m.Index != 0 {
 			r.Prs[m.From].Next = m.Index
@@ -516,7 +516,7 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 /// commit 如果可以的话
 func (r *Raft) tryCommit() {
 	couldCommit, commitID := r.checkCommit()
-	log.Debugf("raft_id: %v tryCommit could commit %v commit %v cur commit %v", r.id, couldCommit, commitID, r.getCommitedID())
+	log.Debugf("raft_id: %v, tryCommit could commit %v commit %v cur commit %v", r.id, couldCommit, commitID, r.getCommitedID())
 	if couldCommit {
 		r.commit(commitID)
 	}
@@ -528,7 +528,7 @@ func (r *Raft) leaderHandleMsgPropose(m pb.Message) {
 	// client request entries only contains data
 	r.RaftLog.appendClientEntries(m.Entries, r.Term)
 
-	log.Debugf("raft_id: %v after leader handle propose len %v lastIndex %v commit %v", r.id, len(m.Entries), r.GetLastIndex(), r.getCommitedID())
+	log.Debugf("raft_id: %v, after leader handle propose len %v lastIndex %v commit %v", r.id, len(m.Entries), r.GetLastIndex(), r.getCommitedID())
 	// 2. 更新自己的状态
 	r.Prs[r.id].Match = r.GetLastIndex()
 	r.Prs[r.id].Next = r.Prs[r.id].Match + 1
@@ -595,26 +595,26 @@ func (r *Raft) candidateHandleRequestVoteResponse(m *RequestVoteResponse) {
 	r.votes[m.From] = m.VoteGranted
 	switch amIwin(r) {
 	case VoteWin:
-		log.Debugf("raft_id: %v ,tag:election,log: win the election", r.id)
+		log.Debugf("raft_id: %v,  ,tag:election,log: win the election", r.id)
 		r.winTheElection()
 	case VoteLose:
-		log.Debugf("raft_id: %v ,tag: election ,log: election lose", r.id)
+		log.Debugf("raft_id: %v,  ,tag: election ,log: election lose", r.id)
 		r.becomeFollower(r.Term, r.Lead)
 	case VoteNotYet:
-		log.Debugf("raft_id: %v tag: election, log: election not yet", r.id)
+		log.Debugf("raft_id: %v, tag: election, log: election not yet", r.id)
 	}
 }
 
 func (r *Raft) followerHandleRequestVote(m *RequestVoteRequest) error {
 	if r.Vote == None {
 		r.Vote = m.CandidateId
-		log.Debugf("raft_id: %v tag:election log: vote agree candidate-id %v  because term == curTerm and vote is none", r.id, m.CandidateId)
+		log.Debugf("raft_id: %v, tag:election log: vote agree candidate-id %v  because term == curTerm and vote is none", r.id, m.CandidateId)
 		r.sendAgreeVote(m.CandidateId)
 	} else if r.Vote == m.CandidateId {
-		log.Debugf("raft_id: %v tag:election vote agree candidate-id %v because candiate term == curTerm and i have vote you already", r.id, m.CandidateId)
+		log.Debugf("raft_id: %v, tag:election vote agree candidate-id %v because candiate term == curTerm and i have vote you already", r.id, m.CandidateId)
 		r.sendAgreeVote(m.CandidateId)
 	} else {
-		log.Debugf("raft_id: %v tag: election vote reject %v->%v because candiate term == curTerm and i have vote %v", r.id, r.id, m.CandidateId, r.id)
+		log.Debugf("raft_id: %v, tag: election vote reject %v->%v because candiate term == curTerm and i have vote %v", r.id, r.id, m.CandidateId, r.id)
 		r.sendRejectVote(m.CandidateId)
 	}
 	return nil
@@ -627,7 +627,7 @@ func (r *Raft) checkCommit() (bool, uint64) {
 	}
 	sort.Slice(matchedIndex, func(i, j int) bool { return matchedIndex[i] < matchedIndex[j] })
 	halfCount := uint64((len(r.Prs)+1)/2) - 1
-	log.Debugf("raft_id: %v check commit matchedIndex %v half count %v total count %v", r.id, matchedIndex, halfCount, len(r.Prs))
+	log.Debugf("raft_id: %v, check commit matchedIndex %v prs %+v half count %v total count %v", r.id, matchedIndex,r.Prs, halfCount, len(r.Prs))
 
 	if matchedIndex[halfCount] > r.getCommitedID() {
 		return true, matchedIndex[halfCount]
@@ -647,12 +647,12 @@ func (r *Raft) commit(index uint64) {
 	if index > r.GetLastIndex() {
 		panic("?? commit bigger that lastindex?")
 	}
-	log.Debugf("raft_id: %v tag: commit-apply  log: commit to %v", r.id, index)
+	log.Debugf("raft_id: %v, tag: commit-apply  log: commit to %v", r.id, index)
 	r.RaftLog.commit(index)
 }
 
 func (r *Raft) becomeFollower(term uint64, leader uint64) {
-	log.Debugf("raft_id: %v becomeFollower term %v leader %v", r.id, term, leader)
+	log.Debugf("raft_id: %v, becomeFollower term %v leader %v", r.id, term, leader)
 	r.electionElapsed = 0
 	r.Vote = 0
 	r.Term = term
@@ -672,12 +672,12 @@ func (r *Raft) becomeCandidate() {
 }
 
 func (r *Raft) becomeLeader() {
-	log.Debugf("raft_id: %v ,tag: election log: 2B=> becomeLeader append entry lastindex %v term %v", r.id, r.GetLastIndex(), r.Term)
+	log.Debugf("raft_id: %v,  ,tag: election log: 2B=> becomeLeader append entry lastindex %v term %v", r.id, r.GetLastIndex(), r.Term)
 
 	r.State = StateLeader
 	// append a empty entries to help commit
 	_ = r.RaftLog.appendClientEntries([]*pb.Entry{new(pb.Entry)}, r.Term)
-	log.Debugf("raft_id: %v becomeLeader after appendClientEntries log %v", r.id, r.RaftLog)
+	log.Debugf("raft_id: %v, becomeLeader after appendClientEntries log %v", r.id, r.RaftLog)
 	for id := range r.Prs {
 		// TestLeaderStartReplication2AB
 		// TestBcastBeat2B
@@ -695,7 +695,7 @@ func (r *Raft) becomeLeader() {
 	last := r.RaftLog.LastIndex()
 
 	entries := r.RaftLog.Entries(first+1, last+1)
-	log.Debugf("raft_id: %v tag: check-leader-entries %v", r.id, ShowEntriesWithMsg(entries))
+	log.Debugf("raft_id: %v, tag: check-leader-entries %v", r.id, ShowEntriesWithMsg(entries))
 }
 
 func (r *Raft) sendVoteToAll() {
@@ -721,7 +721,7 @@ func (r *Raft) sendHeartbeatToAll() {
 
 func (r *Raft) sendAppendToFollower(msg AppendEntriesRequest) {
 	m := msg.ToPb()
-	log.Debugf("raft_id: %v sendAppendToFollower %+v", r.id, ShowMsg(m))
+	log.Debugf("raft_id: %v, sendAppendToFollower %v %+v", r.id, m.To, msg)
 	r.send(m)
 }
 
@@ -731,7 +731,7 @@ func (r *Raft) GetLastIndex() uint64 {
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(from uint64, to uint64, term uint64, commit uint64) {
-	log.Debugf("raft_id: %v heartbeat to %v term %v commit %v", from, to, term, commit)
+	log.Debugf("raft_id: %v, heartbeat to %v term %v commit %v", from, to, term, commit)
 	msg := pb.Message{From: from, To: to, Term: term, Commit: commit, MsgType: pb.MessageType_MsgHeartbeat}
 	r.send(msg)
 }
@@ -754,7 +754,7 @@ func (r *Raft) sendVoteRequest(id uint64) {
 		panic(err)
 	}
 
-	log.Debugf("raft_id: %v ,tag: election log: sendVoteRequest to %v lastIndex %v lastTerm %v", r.id,id ,lastLogIndex, lastLogTerm)
+	log.Debugf("raft_id: %v,  ,tag: election log: sendVoteRequest to %v lastIndex %v lastTerm %v", r.id, id, lastLogIndex, lastLogTerm)
 	r.send(pb.Message{From: r.id, To: id, Term: r.Term, Index: lastLogIndex, LogTerm: lastLogTerm, MsgType: pb.MessageType_MsgRequestVote})
 }
 
@@ -788,7 +788,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 	if m.Commit > r.getCommitedID() {
 		commit := min(m.Commit, r.GetLastIndex())
-		log.Debugf("raft_id: %v heartbeat commit %v cur commit %v", r.id, commit, r.getCommitedID())
+		log.Debugf("raft_id: %v, heartbeat commit %v cur commit %v", r.id, commit, r.getCommitedID())
 		r.commit(commit)
 	}
 	r.sendHeartbeatResponse(m.From)

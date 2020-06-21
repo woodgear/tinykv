@@ -323,7 +323,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	// 实际上不用特意去做任何事？
 	for _, e := range entries {
 		key := meta.RaftLogKey(ps.region.GetId(), e.Index)
-		log.Debugf("raft_id: %v ,stable entry  region_id %v idx %v key %v ", ps.Tag, ps.region.GetId(), e.Index, key)
+		log.Debugf("raft_id: %v,  ,stable entry  region_id %v idx %v key %v ", ps.Tag, ps.region.GetId(), e.Index, key)
 		raftWB.SetMeta(key, &e)
 	}
 	return nil

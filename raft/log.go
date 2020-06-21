@@ -272,7 +272,6 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 }
 
 func (l *RaftLog) clearEntries() {
-	log.Debugf("clearEntries %v", l.String())
 	l.entries = []pb.Entry{}
 }
 
