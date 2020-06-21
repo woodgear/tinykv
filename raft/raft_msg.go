@@ -18,11 +18,11 @@ type AppendEntriesRequest struct {
 }
 
 type AppendEntriesResponse struct {
-	From              uint64
-	To                uint64
-	Term              uint64
-	FollowerLastIndex uint64
-	Success           bool
+	From                     uint64
+	To                       uint64
+	Term                     uint64
+	FollowerLastMatchedIndex uint64
+	Success                  bool
 }
 
 type RequestVoteRequest struct {
@@ -68,6 +68,7 @@ func (m *AppendEntriesResponse) ToPb() pb.Message {
 	msg.From = m.From
 	msg.To = m.To
 	msg.Reject = !m.Success
+	msg.Index = m.FollowerLastMatchedIndex
 	msg.MsgType = pb.MessageType_MsgAppendResponse
 	return msg
 }
@@ -76,6 +77,7 @@ func (m *AppendEntriesResponse) FromPb(msg pb.Message) {
 	m.Term = msg.Term
 	m.From = msg.From
 	m.To = msg.To
+	m.FollowerLastMatchedIndex = msg.Index
 	m.Success = !msg.Reject
 }
 

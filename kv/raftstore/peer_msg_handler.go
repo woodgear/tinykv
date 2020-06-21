@@ -9,10 +9,12 @@ import (
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
+	"github.com/pingcap-incubator/tinykv/raft"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/btree"
 	"github.com/pingcap/errors"
 )
@@ -49,7 +51,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		ready := d.RaftGroup.Ready()
 		log.Debugf("raft_id: %v, tag: GenericTest , log: HandleRaftReady Ready 2B=> %s ready %s", d.Meta.GetId(), d.RaftGroup.Raft.RaftLog.MetaString(), ready.String())
 		// save to storage
-	    d.peerStorage.SaveReadyState(&ready)
+		d.peerStorage.SaveReadyState(&ready)
+
 		// send msgs
 		msgs := ready.Messages
 		log.Debugf("raft_id: %v, log: HandleRaftReady send msgs %+v", d.Meta.GetId(), len(msgs))
@@ -57,48 +60,130 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		// TODO 有可能吗 ready的过程应该是单线程的 即使出现了下述的情况 也应该阻塞在hasReady中才对啊
 		// 一旦process 没有send的返回值快 那么就有可能出现递归的HasReady 所以我们需要在rawnode保证HasReady->Advance的单序
 		d.Send(d.ctx.trans, msgs)
+		d.ProcessReady(ready)
 
-		for _, e := range ready.GetUnApplyEntry() {
-			// 有些applye的entry是不需要处理的 例如新leader的first entry
-			if len(e.Data) == 0 {
-				continue
-			}
-			cmd := raft_cmdpb.RaftCmdRequest{}
-			// we get command now
-			error := cmd.Unmarshal(e.Data)
-			if error != nil {
-				panic(error)
-			}
-			log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", d.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
-			resp, error := d.peerStorage.ProcessRequest(cmd,d.IsLeader())
-			if error != nil {
-				panic(error)
-			}
-			if !d.IsLeader() {
-				continue
-			}
-			if e.Term != ready.Term {
-				log.Debugf("raft_id:%v tag:proposal,log: proposal term %v not eq ready term %v", d.Meta.GetId(), e.Term, ready.Term)
-				continue
-			}
-			// TODO 这里一直在调用d的field的方法感觉很怪
-			log.Debugf("raft_id:%v tag: proposal log: find proposal len %v index  %v term %v", d.Meta.GetId(), len(d.peer.proposals), e.Index, e.Term)
-			// TODO 在什么情况下清理 proposal??
-			proposalIndex, find := d.peer.findProposalIndex(e.Index, e.Term)
+		log.Debugf("raft_id: %v, log: time to advace", d.Meta.GetId())
+		d.RaftGroup.Advance(ready)
+	}
+}
+func (p *peerMsgHandler) ProcessReady(ready raft.Ready) {
+	log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", p.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
+	for _, e := range ready.GetUnApplyEntry() {
+		// TODO ??????
+		if e.Term != ready.Term {
+			log.Debugf("raft_id: %v tag:proposal,log: proposal term %v not eq ready term %v", p.Meta.GetId(), e.Term, ready.Term)
+			continue
+		}
+		// 有些applye的entry是不需要处理的 例如新leader的first entry
+		if len(e.Data) == 0 {
+			continue
+		}
+		cmd := raft_cmdpb.RaftCmdRequest{}
+		// we get command now
+		error := cmd.Unmarshal(e.Data)
+		if error != nil {
+			panic(error)
+		}
+		log.Debugf("raft_id: %v,tag: process, log: ProcessRequest index %v cmd %v",p.peer.Meta.GetId(),e.Index,util.ShowRaftCmdRequest(&cmd))
+		resp, error := p.ProcessRequest(cmd)
+
+		p.peerStorage.applyState.AppliedIndex = e.Index
+		if error != nil {
+			panic(error)
+		}
+
+		// TODO 这里一直在调用d的field的方法感觉很怪
+		log.Debugf("raft_id: %v tag: proposal log: find proposal len %v index  %v term %v", p.Meta.GetId(), len(p.peer.proposals), e.Index, e.Term)
+		// TODO 在什么情况下清理 proposal??
+		if p.IsLeader() {
+			proposalIndex, find := p.peer.findProposalIndex(e.Index, e.Term)
 			if !find {
-				log.Debugf("raft_id: %v not find proposal index??", d.Meta.GetId())
+				log.Errorf("raft_id: %v,tag:proposal not find proposal index %v %v ??", p.Meta.GetId(), e.Index, e.Term)
 				panic("not find proposal index??")
 			}
 			log.Debugf("find result %v %v", proposalIndex, find)
-			d.proposals[proposalIndex].cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
-			d.proposals[proposalIndex].cb.Done(resp)
-			d.proposals = d.proposals[proposalIndex+1:]
+			if p.proposals[proposalIndex].cb != nil {
+				p.proposals[proposalIndex].cb.Txn = p.peerStorage.Engines.Kv.NewTransaction(false)
+				p.proposals[proposalIndex].cb.Done(resp)
+			}
 
+			p.proposals = p.proposals[proposalIndex+1:]
 		}
 
-		log.Debugf("raft_id:%v, log: time to advace", d.Meta.GetId())
-		d.RaftGroup.Advance(ready)
 	}
+}
+
+func (p *peerMsgHandler) ProcessRequest(cmdReq raft_cmdpb.RaftCmdRequest) (*raft_cmdpb.RaftCmdResponse, error) {
+	resp := new(raft_cmdpb.RaftCmdResponse)
+	resp.Header = new(raft_cmdpb.RaftResponseHeader)
+	resp.Responses = []*raft_cmdpb.Response{}
+
+	// if cmdReq.AdminRequest != nil && p.IsLeader() {
+	// 	switch cmdReq.AdminRequest.CmdType {
+	// 	case raft_cmdpb.AdminCmdType_CompactLog:
+	// 		{
+	// 			compactCmd := cmdReq.AdminRequest.CompactLog
+	// 			p.peerStorage.applyState.TruncatedState.Index = compactCmd.CompactIndex
+	// 			p.peerStorage.applyState.TruncatedState.Term = compactCmd.CompactTerm
+	// 			p.ScheduleCompactLog(0, compactCmd.CompactIndex)
+	// 			log.Debugf("raft_id: %v tag: snap log: get snap req %v %v %v", p.Meta.GetId(), cmdReq.Header.Peer.Id, compactCmd.CompactIndex, compactCmd.CompactTerm)
+	// 		}
+	// 	}
+	// }
+
+	for _, req := range cmdReq.Requests {
+		switch req.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			{
+				if !p.IsLeader() {
+					continue
+				}
+				getReq := req.Get
+				getResp := new(raft_cmdpb.GetResponse)
+				val, errror := engine_util.GetCF(p.peerStorage.Engines.Kv, getReq.Cf, getReq.Key)
+				if errror != nil {
+					return nil, errror
+				}
+				getResp.Value = val
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Get, Get: getResp})
+			}
+		case raft_cmdpb.CmdType_Delete:
+			{
+				deleteReq := req.Delete
+				deleteResp := new(raft_cmdpb.DeleteResponse)
+				errror := engine_util.DeleteCF(p.peerStorage.Engines.Kv, deleteReq.Cf, deleteReq.Key)
+				if errror != nil {
+					return nil, errror
+				}
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Delete, Delete: deleteResp})
+
+			}
+		case raft_cmdpb.CmdType_Snap:
+			{
+
+				if !p.IsLeader() {
+					return nil, nil
+				}
+				// snap req的返回值实际使用的是挂在cb上的txn
+				snapResp := new(raft_cmdpb.SnapResponse)
+				snapResp.Region = p.Region()
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Snap, Snap: snapResp})
+			}
+		case raft_cmdpb.CmdType_Put:
+			{
+				putReq := req.Put
+				putResp := new(raft_cmdpb.PutResponse)
+				log.Debugf("raft_id: %v,put cf key %v val %v", p.Meta.Id, string(putReq.Key), string(putReq.Value))
+				errror := engine_util.PutCF(p.peerStorage.Engines.Kv, putReq.Cf, putReq.Key, putReq.Value)
+				if errror != nil {
+					return nil, errror
+				}
+				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Put, Put: putResp})
+			}
+		}
+	}
+
+	return resp, nil
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -107,7 +192,7 @@ func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	case message.MsgTypeRaftMessage:
 		raftMsg := msg.Data.(*rspb.RaftMessage)
 		if err := d.onRaftMsg(raftMsg); err != nil {
-			log.Errorf("raft_id:%v %s handle raft message error %v", d.peer.Meta.GetId(), d.Tag, err)
+			log.Errorf("raft_id: %v %s handle raft message error %v", d.peer.Meta.GetId(), d.Tag, err)
 		}
 	// 客户端的propose/ 客户端的请求
 	// raft-server:write->router->raft_worker
@@ -128,6 +213,31 @@ func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	case message.MsgTypeStart:
 		d.startTicker()
 	}
+}
+
+// TODO 对查询做优化
+// 只有leader 会收到propose 只有leader会维护 proposal response
+func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
+	log.Debugf("raft_id: %v, log: GenericTest 2B=> proposeRaftCommand ", d.peer.Meta.GetId())
+	err := d.preProposeRaftCommand(msg)
+	if err != nil {
+		cb.Done(ErrResp(err))
+		return
+	}
+	// Your Code Here (2B).
+	data, err := msg.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	d.RaftGroup.Propose(data)
+	lastIndex := d.RaftGroup.Raft.RaftLog.LastIndex() // TODO 绝对很奇怪
+	lastTerm, error := d.RaftGroup.Raft.RaftLog.Term(lastIndex)
+	log.Debugf("raft_id: %v, tag:proposal log: 2B=> propose cmd %v %v %v ", d.Meta.GetId(), util.ShowRaftCmdRequest(msg), lastIndex, lastTerm)
+	if error != nil {
+		panic(error)
+	}
+	log.Debugf("raft_id: %v, tag: proposal log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastIndex, lastTerm)
+	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastIndex, term: lastTerm, cb: cb})
 }
 
 func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) error {
@@ -164,31 +274,6 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 		return errEpochNotMatching
 	}
 	return err
-}
-
-// TODO 对查询做优化
-// 只有leader 会收到propose 只有leader会维护 response
-func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	log.Debugf("raft_id:%v, log: GenericTest 2B=> proposeRaftCommand", d.peer.Meta.GetId())
-	err := d.preProposeRaftCommand(msg)
-	if err != nil {
-		cb.Done(ErrResp(err))
-		return
-	}
-	// Your Code Here (2B).
-	data, err := msg.Marshal()
-	if err != nil {
-		panic(err)
-	}
-	log.Debugf("raft_id: %v, log: 2B=> proprose data %v ", d.Meta.GetId(), data)
-	d.RaftGroup.Propose(data)
-	lastIndex := d.RaftGroup.Raft.RaftLog.LastIndex() // TODO 绝对很奇怪
-	lastTerm, error := d.RaftGroup.Raft.RaftLog.Term(lastIndex)
-	if error != nil {
-		panic(error)
-	}
-	log.Debugf("raft_id: %v, tag: proposal log: GenericTest update proposal index %v term %v", d.Meta.GetId(), lastIndex, lastTerm)
-	d.peer.proposals = append(d.peer.proposals, &proposal{index: lastIndex, term: lastTerm, cb: cb})
 }
 
 func (d *peerMsgHandler) onTick() {
@@ -237,9 +322,9 @@ func (d *peerMsgHandler) ScheduleCompactLog(firstIndex uint64, truncatedIndex ui
 }
 
 func (d *peerMsgHandler) onRaftMsg(msg *rspb.RaftMessage) error {
-	log.Debugf("raft_id: %v, log: %s handle raft message %s from %d to %d",
-		d.peer.Meta.GetId(),
-		d.Tag, msg.GetMessage().GetMsgType(), msg.GetFromPeer().GetId(), msg.GetToPeer().GetId())
+	// log.Debugf("raft_id: %v, log: %s handle raft message %s from %d to %d",
+	// 	d.peer.Meta.GetId(),
+	// 	d.Tag, msg.GetMessage().GetMsgType(), msg.GetFromPeer().GetId(), msg.GetToPeer().GetId())
 	if !d.validateRaftMessage(msg) {
 		return nil
 	}
@@ -284,9 +369,7 @@ func (d *peerMsgHandler) onRaftMsg(msg *rspb.RaftMessage) error {
 // return false means the message is invalid, and can be ignored.
 func (d *peerMsgHandler) validateRaftMessage(msg *rspb.RaftMessage) bool {
 	regionID := msg.GetRegionId()
-	from := msg.GetFromPeer()
 	to := msg.GetToPeer()
-	log.Debugf("[region %d] handle raft message %s from %d to %d", regionID, msg, from.GetId(), to.GetId())
 	if to.GetStoreId() != d.storeID() {
 		log.Warnf("[region %d] store not match, to store id %d, mine %d, ignore it",
 			regionID, to.GetStoreId(), d.storeID())
@@ -481,6 +564,7 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 
 	appliedIdx := d.peerStorage.AppliedIndex()
 	firstIdx, _ := d.peerStorage.FirstIndex()
+
 	var compactIdx uint64
 	if appliedIdx > firstIdx && appliedIdx-firstIdx >= d.ctx.cfg.RaftLogGcCountLimit {
 		compactIdx = appliedIdx
@@ -495,16 +579,16 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 		return
 	}
 
-	term, err := d.RaftGroup.Raft.RaftLog.Term(compactIdx)
-	if err != nil {
-		log.Fatalf("appliedIdx: %d, firstIdx: %d, compactIdx: %d", appliedIdx, firstIdx, compactIdx)
-		panic(err)
-	}
-
-	// Create a compact log request and notify directly.
-	regionID := d.regionId
-	request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)
-	d.proposeRaftCommand(request, nil)
+	// term, err := d.RaftGroup.Raft.RaftLog.Term(compactIdx)
+	// if err != nil {
+	// 	log.Fatalf("appliedIdx: %d, firstIdx: %d, compactIdx: %d", appliedIdx, firstIdx, compactIdx)
+	// 	panic(err)
+	// }
+	// log.Debugf("raft_id: %v tag:snap onRaftGCLogTick %v %v %v %v %v", d.Meta.GetId(),compactIdx, appliedIdx, firstIdx, appliedIdx-firstIdx, d.ctx.cfg.RaftLogGcCountLimit)
+	// // Create a compact log request and notify directly.
+	// regionID := d.regionId
+	// request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)
+	// d.proposeRaftCommand(request, nil)
 }
 
 func (d *peerMsgHandler) onSplitRegionCheckTick() {

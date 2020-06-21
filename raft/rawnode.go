@@ -95,50 +95,21 @@ func (r *Ready) String() string {
 
 // TODO make it to method of HardState
 func hardStateEq(left, right pb.HardState) bool {
-	return !(left.Vote == right.Vote && left.Term == right.Term && left.Commit == right.Commit)
+	return (left.Vote == right.Vote && left.Term == right.Term && left.Commit == right.Commit)
 }
 
 // RawNode is a wrapper of Raft.
 type RawNode struct {
-	Raft            *Raft
-	LastStableIndex uint64
-	preReadyState   ReadyState
-	pendingReady    bool
+	Raft         *Raft
+	preHardState pb.HardState
 }
 
 type ReadyState struct {
-	HardState       pb.HardState
-	LastStableIndex uint64
-	LastStableTerm  uint64
-	LastApplyIndex  uint64
-	LastApplyTerm   uint64
-	MsgsLen         uint64
-}
-
-// TODO better name
-func isReadyStateChange(curReady, preReady ReadyState) (bool, string) {
-	stableEq := curReady.LastStableIndex == preReady.LastStableIndex && curReady.LastStableTerm == preReady.LastStableTerm
-	applyEq := curReady.LastApplyIndex == preReady.LastApplyIndex && curReady.LastApplyTerm == preReady.LastApplyTerm
-	msgEq := curReady.MsgsLen == 0 // 当currentReadyState中没有msg时 ReadyState 关于msg就没有改变
-	hardStateEq := IsHardStateEqual(curReady.HardState, preReady.HardState)
-	status := fmt.Sprintf("stableEq:%v applyEq:%v curReady.msgLen: %v right.msgLen: %v hardstateEq: %v curReady.hardState: %v right.hardState: %s",
-		stableEq, applyEq, curReady.MsgsLen, preReady.MsgsLen, hardStateEq,
-		ShowHardState(curReady.HardState),
-		ShowHardState(preReady.HardState),
-	)
-	return hardStateEq && stableEq && applyEq && msgEq, status
-}
-
-func (rs ReadyState) String() string {
-	return fmt.Sprintf("{hardState:%v ,stable:%v %v ,apply: %v %v,msg: %v}", ShowHardState(rs.HardState),
-		rs.LastStableIndex,
-		rs.LastStableTerm,
-		rs.LastApplyIndex,
-		rs.LastApplyTerm,
-		rs.MsgsLen)
-}
-func (rs ReadyState) diff(right ReadyState) string {
-	return fmt.Sprintf("left %s right %s", rs.String(), right.String())
+	HardState      pb.HardState
+	UnstableEmpty  bool
+	LastApplyIndex uint64
+	LastApplyTerm  uint64
+	MsgsLen        uint64
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
@@ -146,10 +117,8 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
 	raft := newRaft(config)
 	node := &RawNode{
-		Raft:            raft,
-		LastStableIndex: raft.getStableID(),
-		preReadyState:   raft.GetReadyState(),
-		pendingReady:    false,
+		Raft:         raft,
+		preHardState: raft.hardState(),
 	}
 	return node, nil
 }
@@ -189,7 +158,7 @@ func (rn *RawNode) ProposeConfChange(cc pb.ConfChange) error {
 	})
 }
 
-// ApplyConfChange applies a config change to the local node.
+//  ApplyConfChange applies a config change to the local node.
 func (rn *RawNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
 	if cc.NodeId == None {
 		return &pb.ConfState{Nodes: nodes(rn.Raft)}
@@ -222,27 +191,20 @@ func (rn *RawNode) Step(m pb.Message) error {
 // 首先检查是否有pendingReady
 // 接着检查新的Ready与preReady是否有变化
 // 有 HasReady 返回true 调用Ready 更新Pending Ready 在advacne时 取消Pending Ready 并更新PreReady
-// 不允许递归的HasReady
 //
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-
-	// 如果有一个Pending的Ready 要等到这个Ready Advance 才能 Ready
-	// TODO did we really need this?
-	if rn.pendingReady {
-		log.Debugf("raft_id:%v has a pending ready", rn.Raft.id)
-		return false
-	}
-	currentReadyState := rn.Raft.GetReadyState()
-	isEq, status := isReadyStateChange(currentReadyState, rn.preReadyState)
-	if !isEq {
-		log.Debugf("raft_id: %v has ready diff %s", rn.Raft.id, status)
-		return true
-	} else {
-		// log.Debugf("raft_id: %v log: not ready diff: %s", rn.Raft.id, status)
-		log.Debugf("raft_id: %v log: not ready", rn.Raft.id)
-	}
-	return false
+	// 有未发的信息
+	// 有未 stable 的 entries
+	// 有未 apply 的 entries
+	// hardState change
+	// log.Debugf("%v %v %v",ShowHardState(rn.Raft.hardState()),ShowHardState(rn.preHardState),!hardStateEq(rn.Raft.hardState(), rn.preHardState))
+	hardStateChange := !hardStateEq(rn.Raft.hardState(), rn.preHardState)
+	unSendMsgs := len(rn.Raft.msgs) != 0
+	unStableEntries := len(rn.Raft.RaftLog.entries) != 0
+	unApplyEntries := rn.Raft.RaftLog.applied != rn.Raft.RaftLog.committed
+	// log.Debugf("hardStateChange %v unSendMsgs %v unStableEntries %v unApplyEntries %v", hardStateChange, unSendMsgs, unStableEntries, unApplyEntries)
+	return hardStateChange || unSendMsgs || unStableEntries || unApplyEntries
 }
 
 // Ready returns the current point-in-time state of this RawNode.
@@ -255,6 +217,11 @@ func (rn *RawNode) Ready() Ready {
 	curHardState := rn.Raft.hardState()
 
 	unapplyEntries := rn.Raft.RaftLog.unAppliedEntis()
+	log.Debugf("raft_id :%v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries),ShowHardState(curHardState))
+	if len(unapplyEntries) != int(rn.Raft.RaftLog.committed-rn.Raft.RaftLog.applied) {
+		panic("xxx len ???")
+	}
+
 	unstableEntries := rn.Raft.RaftLog.unstableEntries()
 	msgs := rn.Raft.msgs
 	ready.HardState = curHardState
@@ -262,10 +229,6 @@ func (rn *RawNode) Ready() Ready {
 	ready.UnApplyEntry = unapplyEntries
 	ready.UnStableEntry = unstableEntries
 	ready.Messages = msgs
-	// TODO is there a goog place
-	if rn.pendingReady == false {
-		rn.pendingReady = true
-	}
 	return ready
 }
 
@@ -273,31 +236,26 @@ func (rn *RawNode) Ready() Ready {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// TODO 这个rd 应当与pendingReady是相等的
-	rn.preReadyState.HardState = rd.HardState
+	rn.preHardState = rd.HardState
 	log.Debugf("raft_id: %v in advace", rn.Raft.id)
 	if len(rd.UnStableEntry) > 0 {
 		e := rd.UnStableEntry[len(rd.UnStableEntry)-1]
-		log.Debugf("raft_id: %v advance update stable %v", rn.Raft.id, e.Index)
+		log.Debugf("raft_id: %v tag:commit-apply advance update stable %v", rn.Raft.id, e.Index)
 		rn.Raft.RaftLog.stabled = e.Index
-		rn.preReadyState.LastStableIndex = e.Index
-		rn.preReadyState.LastStableTerm = e.Term
 	}
 
-	// TODO apply 到底是看hardState中的commit还是看ready中的commitEntries
 	if len(rd.UnApplyEntry) > 0 {
 		e := rd.UnApplyEntry[len(rd.UnApplyEntry)-1]
-		log.Debugf("raft_id: %v 2B=> advance update apply %v", rn.Raft.id, e.Index)
+		log.Debugf("raft_id: %v tag:commit-apply  log 2B=> advance update apply %v", rn.Raft.id, e.Index)
+		if e.Index > rn.Raft.RaftLog.committed {
+			log.Errorf("raft_id: %v apply %v commit %v", rn.Raft.id, e.Index, rn.Raft.RaftLog.committed)
+			panic("advance apply > commit????")
+		}
 		rn.Raft.RaftLog.applied = e.Index
-		rn.preReadyState.LastApplyIndex = e.Index
-		rn.preReadyState.LastApplyTerm = e.Term
 	}
-	newMsgs := rn.Raft.msgs[len(rd.Messages):]
-	log.Debugf("raft_id: %v => advance update msg ready-len %v cur-len %v new-len %v", rn.Raft.id, len(rd.Messages), len(rn.Raft.msgs), len(newMsgs))
 
-	// raft 的msgs是单调增 无修改的
-	rn.Raft.msgs = newMsgs
-	rn.preReadyState.MsgsLen = uint64(len(newMsgs))
-	rn.pendingReady = false
+	rn.Raft.msgs = []pb.Message{}
+	rn.Raft.RaftLog.clearEntries()
 }
 
 // GetProgress return the the Progress of this node and its peers, if this

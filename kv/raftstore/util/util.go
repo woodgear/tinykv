@@ -226,7 +226,7 @@ func ShowRaftCmdRequest(reqs *raft_cmdpb.RaftCmdRequest) string {
 		case raft_cmdpb.CmdType_Put:
 			{
 				putReq := req.Put
-				msg = fmt.Sprintf("%s {type:%v,val: {cf:%v key:%v,val:%v} }", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)], putReq.Cf, putReq.Key, putReq.Value)
+				msg = fmt.Sprintf("%s {type:%v,val: {cf:%v key:%v,val:%v} }", msg, raft_cmdpb.CmdType_name[int32(req.CmdType)], putReq.Cf, string(putReq.Key), string(putReq.Value))
 			}
 		case raft_cmdpb.CmdType_Snap:
 			{

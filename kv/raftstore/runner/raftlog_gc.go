@@ -74,12 +74,13 @@ func (r *raftLogGCTaskHandler) reportCollected(collected uint64) {
 }
 
 func (r *raftLogGCTaskHandler) Handle(t worker.Task) {
+	log.Debugf("tag:snap log: gc task")
 	logGcTask, ok := t.(*RaftLogGCTask)
 	if !ok {
 		log.Error("unsupported worker.Task: %+v", t)
 		return
 	}
-	log.Debugf("execute gc log. [regionId: %d, endIndex: %d]", logGcTask.RegionID, logGcTask.EndIdx)
+	log.Debugf("tag: snp gc, execute gc log. [regionId: %d, endIndex: %d]", logGcTask.RegionID, logGcTask.EndIdx)
 	collected, err := r.gcRaftLog(logGcTask.RaftEngine, logGcTask.RegionID, logGcTask.StartIdx, logGcTask.EndIdx)
 	if err != nil {
 		log.Errorf("failed to gc. [regionId: %d, collected: %d, err: %v]", logGcTask.RegionID, collected, err)

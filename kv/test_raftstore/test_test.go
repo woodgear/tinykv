@@ -63,14 +63,17 @@ func checkClntAppends(t *testing.T, clnt int, v string, count int) {
 		wanted := "x " + strconv.Itoa(clnt) + " " + strconv.Itoa(j) + " y"
 		off := strings.Index(v, wanted)
 		if off < 0 {
-			t.Fatalf("%v missing element %v in Append result %v", clnt, wanted, v)
+			t.Fatalf("%v missing element %v in Append result ", clnt, wanted)
+			panic("xx")
 		}
 		off1 := strings.LastIndex(v, wanted)
 		if off1 != off {
 			t.Fatalf("duplicate element %v in Append result", wanted)
+			panic("xx")
 		}
 		if off <= lastoff {
 			t.Fatalf("wrong order for element %v in Append result", wanted)
+			panic("xxxx")
 		}
 		lastoff = off
 	}
@@ -87,13 +90,16 @@ func checkConcurrentAppends(t *testing.T, v string, counts []int) {
 			off := strings.Index(v, wanted)
 			if off < 0 {
 				t.Fatalf("%v missing element %v in Append result %v", i, wanted, v)
+				panic("xxxx")
 			}
 			off1 := strings.LastIndex(v, wanted)
 			if off1 != off {
 				t.Fatalf("duplicate element %v in Append result", wanted)
+				panic("xxxxx")
 			}
 			if off <= lastoff {
 				t.Fatalf("wrong order for element %v in Append result", wanted)
+				panic("xxxxxx")
 			}
 			lastoff = off
 		}
@@ -147,8 +153,7 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 	}
 }
 
-func TestSimpleCluster2B(t *testing.T) {
-
+func TestSimpleElection2B(t *testing.T) {
 	nservers := 3
 	cfg := config.NewTestConfig()
 	cluster := NewTestCluster(nservers, cfg)
@@ -157,20 +162,117 @@ func TestSimpleCluster2B(t *testing.T) {
 
 	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
 	time.Sleep(2 * electionTimeout)
+}
 
-	for i := 0; i < 100; i++ {
-		log.Debugf("TestSimpleCluster put %v", []byte("key1"))
+func TestSimpleCluster2B(t *testing.T) {
+
+	nservers := 3
+	cfg := config.NewTestConfig()
+	cluster := NewTestCluster(nservers, cfg)
+	cluster.Start()
+
+	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
+	time.Sleep(2 * electionTimeout)
+
+	for i := 0; i < 10; i++ {
+		log.Debugf("TestSimpleCluster put %v", i)
 		key := fmt.Sprintf("key-%v", i)
 		val := fmt.Sprintf("val-%v", i)
 
 		cluster.MustPut([]byte(key), []byte(val))
 
 		resp := cluster.Get([]byte(key))
+		t.Logf("resp %v", string(resp))
 		if !bytes.Equal(resp, []byte(val)) {
 			t.Errorf("could not get puted value")
 		}
 	}
+
+	cluster.ClearFilters()
+	cluster.AddFilter(&PartitionFilter{
+		s1: []uint64{0, 1},
+		s2:[]uint64{2},
+	})
+
+	for i := 10; i < 20; i++ {
+		log.Debugf("TestSimpleCluster put %v", i)
+		key := fmt.Sprintf("key-%v", i)
+		val := fmt.Sprintf("val-%v", i)
+
+		cluster.MustPut([]byte(key), []byte(val))
+
+		resp := cluster.Get([]byte(key))
+		t.Logf("resp %v", string(resp))
+		if !bytes.Equal(resp, []byte(val)) {
+			t.Errorf("could not get puted value")
+		}
+	}
+	cluster.ClearFilters()
+
+	for i := 20; i < 30; i++ {
+		log.Debugf("TestSimpleCluster put %v", i)
+		key := fmt.Sprintf("key-%v", i)
+		val := fmt.Sprintf("val-%v", i)
+
+		cluster.MustPut([]byte(key), []byte(val))
+
+		resp := cluster.Get([]byte(key))
+		t.Logf("resp %v", string(resp))
+		if !bytes.Equal(resp, []byte(val)) {
+			t.Errorf("could not get puted value")
+		}
+	}
+
+
+	// should be ok after restart
+	log.Warnf("shutdown servers\n")
+	for i := 1; i <= nservers; i++ {
+		cluster.StopServer(uint64(i))
+	}
+	// Wait for a while for servers to shutdown, since
+	// shutdown isn't a real crash and isn't instantaneous
+	time.Sleep(electionTimeout)
+	log.Warnf("restart servers\n")
+	// crash and re-start all
+	for i := 1; i <= nservers; i++ {
+		cluster.StartServer(uint64(i))
+	}
+
+	for i := 0; i < 30; i++ {
+		log.Debugf("TestSimpleCluster put %v", i)
+		key := fmt.Sprintf("key-%v", i)
+		val := fmt.Sprintf("val-%v", i)
+		resp := cluster.Get([]byte(key))
+		t.Logf("resp %v", string(resp))
+		if !bytes.Equal(resp, []byte(val)) {
+			t.Errorf("could not get puted value")
+		}
+	}
+
 }
+
+// func TestSimplePartition2B(t *testing.T) { {
+// 	nservers := 3
+// 	cfg := config.NewTestConfig()
+// 	cluster := NewTestCluster(nservers, cfg)
+// 	cluster.Start()
+// 	defer cluster.Shutdown()
+
+// 	electionTimeout := cfg.RaftBaseTickInterval * time.Duration(cfg.RaftElectionTimeoutTicks)
+// 	time.Sleep(2 * electionTimeout)
+// 	for i := 0; i < 100; i++ {
+// 		log.Debugf("TestSimpleCluster put %v", i)
+// 		key := fmt.Sprintf("key-%v", i)
+// 		val := fmt.Sprintf("val-%v", i)
+
+// 		cluster.MustPut([]byte(key), []byte(val))
+
+// 		resp := cluster.Get([]byte(key))
+// 		if !bytes.Equal(resp, []byte(val)) {
+// 			t.Errorf("could not get puted value")
+// 		}
+// 	}
+// }
 
 // Basic test is as follows: one or more clients submitting Put/Scan
 // operations to set of servers for some period of time.  After the period is
@@ -241,7 +343,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 	for i := 0; i < nclients; i++ {
 		clnts[i] = make(chan int, 1)
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 1; i++ {
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
@@ -268,11 +370,11 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 				} else {
 					start := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", 0)
 					end := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)
-					// log.Infof("%d: client new scan %v-%v\n", cli, start, end)
+					log.Debugf("%d: client new scan %v-%v end %v", cli, start, end,j)
 					values := cluster.Scan([]byte(start), []byte(end))
 					v := string(bytes.Join(values, []byte("")))
 					if v != last {
-						log.Fatalf("get wrong value, client %v\nwant:%v\ngot: %v\n", cli, last, v)
+						log.Fatalf("get wrong value, client %v\nwant:%v\ngot: %v j is :%v\n", cli, last,v,j)
 						os.Exit(-1)
 					}
 				}
@@ -385,33 +487,6 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 
 	}
 	log.Debugf("tag: count success")
-}
-func TestAllInOne(t *testing.T) {
-
-	go func() {
-		http.ListenAndServe("localhost:6060", nil)
-	}()
-	for {
-		TestSimpleCluster2B(t)
-		log.Debugf("should sleep")
-		time.Sleep(time.Minute * 60)
-		// log.Debugf("PASS TestSimpleCluster2B")
-	}
-	// TestBasic2B(t)
-	// log.Debugf("PASS TestBasic2B")
-	// time.Sleep(3*1000)
-	// TestConcurrent2B(t)
-	// log.Debugf("PASS TestConcurrent2B")
-
-	// TestUnreliable2B(t)
-	// TestOnePartition2B(t)
-	// TestManyPartitionsOneClient2B(t)
-	// TestManyPartitionsManyClients2B(t)
-	// TestPersistOneClient2B(t)
-	// TestPersistConcurrent2B(t)
-	// TestPersistConcurrentUnreliable2B(t)
-	// TestPersistPartition2B(t)
-	// TestPersistPartitionUnreliable2B(t)
 }
 
 func TestBasic2B(t *testing.T) {
@@ -544,7 +619,8 @@ func TestOneSnapshot2C(t *testing.T) {
 			t.Fatalf("unexpected truncated state %v", state.TruncatedState)
 		}
 	}
-
+	log.Debugf("tag:snap add PartitionFilter")
+	// 使得1被隔离这样当leader同步时就会发送snapshot给他
 	cluster.AddFilter(
 		&PartitionFilter{
 			s1: []uint64{1},
@@ -554,10 +630,12 @@ func TestOneSnapshot2C(t *testing.T) {
 
 	// write some data to trigger snapshot
 	for i := 100; i < 115; i++ {
+		log.Debugf("tag:snap put cf %v", i)
 		cluster.MustPutCF(cf, []byte(fmt.Sprintf("k%d", i)), []byte(fmt.Sprintf("v%d", i)))
 	}
 	cluster.MustDeleteCF(cf, []byte("k2"))
 	time.Sleep(500 * time.Millisecond)
+	// 此时1是被隔离的状态 无法从中获取k100
 	MustGetCfNone(cluster.engines[1], cf, []byte("k100"))
 	cluster.ClearFilters()
 

@@ -135,3 +135,4 @@ func NewTestCluster(count int, cfg *config.Config) *Cluster {
 	simulator := NewNodeSimulator(schedulerClient)
 	return NewCluster(count, schedulerClient, simulator, cfg)
 }
+

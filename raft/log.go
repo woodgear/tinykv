@@ -15,7 +15,6 @@
 package raft
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/pingcap-incubator/tinykv/log"
@@ -29,9 +28,8 @@ import (
 //                            log entries
 //
 // for simplify the RaftLog implement should manage all log entries
-// TODO 一个有趣的问题在于 first applied commited stable 的定义是什么,是否需要+1,当GetEntry（Commit）返回的是最后一个Commit的Entry 还是第一个uncommit的Entry
-// 我使用的定义是前者
 // that not truncated
+// staorage 和entries共同提供对Raft算法模块的支持
 type RaftLog struct {
 	// storage contains all stable entries since the last snapshot.
 	storage Storage
@@ -57,8 +55,6 @@ type RaftLog struct {
 	// (Used in 2C)
 	pendingSnapshot *pb.Snapshot
 
-	// storage中的firstIndex
-	offset    uint64
 	initIndex uint64
 	initTerm  uint64
 }
@@ -93,26 +89,26 @@ func newLog(storage Storage) *RaftLog {
 	// if lastIndex < firstIndex 这表示storage中没有任何 compact->stable之间的entry
 	// 说明这是新起的Raft Node
 	if lastIndex >= firstIndex {
-		//我们希望拿到storage中所有的compact->stable的entries
-		// 因为entries是[) 所以lastIndex要+1
 		entries, error := storage.Entries(firstIndex, lastIndex+1)
 		if error != nil {
 			return nil
 		}
 		l.entries = append(l.entries, entries...)
-		l.offset = l.entries[0].Index
 	} else {
-		l.offset = firstIndex
 	}
+
 	return l
 }
 
 // LastIndex return the last index of the lon entries
 func (l *RaftLog) LastIndex() uint64 {
-	// if len(l.entries) ==0 we must make sure LastIndex+1 == offset
-	// thus that first been apped entry index will be lastIndex+1 which in fact is offset
 	if len(l.entries) == 0 {
-		return l.offset - 1
+		storageLastIndex, err := l.storage.LastIndex()
+		// TODO fix panic
+		if err != nil {
+			panic(err)
+		}
+		return storageLastIndex
 	}
 	return l.entries[len(l.entries)-1].Index
 }
@@ -126,34 +122,69 @@ func (l *RaftLog) GetTerm(index uint64) uint64 {
 }
 
 func (l *RaftLog) isValidIndex(index uint64) error {
-	realIndex := index - l.offset
-	if realIndex >= 0 && realIndex < uint64(len(l.entries)) {
+	firstIndex, err := l.storage.FirstIndex()
+	if err != nil {
+		return err
+	}
+	if index < firstIndex {
+		return fmt.Errorf("invalid index index %v firstIndex %v", index, firstIndex)
+	}
+	lastIndex := l.LastIndex()
+	if index > lastIndex {
+		return fmt.Errorf("invalid index index %v lastIndex %v", index, lastIndex)
+	}
+	return nil
+}
+
+func (l *RaftLog) GetEntry(index uint64) (*pb.Entry, error) {
+	err := l.isValidIndex(index)
+	if err != nil {
+		return nil, err
+	}
+	entryPtr := l.getEntryFromRaftLogIfExist(index)
+	if entryPtr != nil {
+		return entryPtr, nil
+	}
+
+	entry, err := l.storage.Entries(index, index+1)
+	if err != nil {
+		return nil, err
+	}
+	return &entry[0], nil
+}
+
+func (l *RaftLog) getEntryFromRaftLogIfExist(index uint64) *pb.Entry {
+	if !l.isInRaftLogEntriesRange(index) {
 		return nil
 	}
-	return errors.New(fmt.Sprintf("invalid index %v offset %v len %v", index, l.offset, len(l.entries)))
+	return &l.entries[index-l.entries[0].Index]
+}
+
+func (l *RaftLog) isInRaftLogEntriesRange(index uint64) bool {
+	if len(l.entries) == 0 {
+		return false
+	}
+	return l.entries[0].Index <= index && l.entries[len(l.entries)-1].Index >= index
 }
 
 // Entries from raftlog if low or hight not in range it will panic
 // 将raftlog 视为数组
-func (l *RaftLog) Entries(low, hight uint64) []pb.Entry {
-	log.Debugf("get entries %v %v", low, hight)
-	if low > hight {
-		panic(fmt.Errorf("Entries low>hight %v %v fail", low, hight))
+// 上层raft 算法模块查询Entries 一般是sendAppend时要获取数据
+// 应当会有报错 表示Entries已经被gc了
+func (l *RaftLog) Entries(low, high uint64) []pb.Entry {
+	if low > high {
+		panic(fmt.Errorf("Entries low>hight %v %v fail", low, high))
 	}
-	if low == hight {
-		return []pb.Entry{}
+	ents := []pb.Entry{}
+	for i := low; i < high; i++ {
+		ent, err := l.GetEntry(i)
+		// TODO return error?
+		if err != nil {
+			panic(err)
+		}
+		ents = append(ents, *ent)
 	}
-	if err := l.isValidIndex(low); err != nil {
-		panic(err)
-	}
-	if err := l.isValidIndex(hight - 1); err != nil {
-		panic(err)
-	}
-	entries := []pb.Entry{}
-	for index := low; index < hight; index++ {
-		entries = append(entries, *l.getEntry(index))
-	}
-	return entries
+	return ents
 }
 
 // PtrEntries same as Entries but return []*pb.Entry instead of []pb.Entry
@@ -166,14 +197,14 @@ func (l *RaftLog) PtrEntries(low, hight uint64) []*pb.Entry {
 	return ptrEntries
 }
 
-func (l *RaftLog) getEntry(index uint64) *pb.Entry {
-	realIndex := index - l.offset
-	return &l.entries[realIndex]
-}
-
 // log中是否为空 （初始化时）
 func (l *RaftLog) IsEmpty() bool {
 	return len(l.entries) == 0
+}
+
+func (l *RaftLog) commit(index uint64) {
+	// log.Debugf("log commit 1 %v", l.String())
+	l.committed = index
 }
 
 // We need to compact the log entries in some point of time like
@@ -184,14 +215,13 @@ func (l *RaftLog) maybeCompact() {
 }
 
 func (l *RaftLog) String() string {
-	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,offset: %v,entry_len: %v,entries: %v}`,
+	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,entry_len: %v,entries: %v}`,
 		l.initIndex,
 		l.initTerm,
 		l.committed,
 		l.stabled,
 		l.applied,
 		l.LastIndex(),
-		l.offset,
 		len(l.entries),
 		ShowEntries(l.entries),
 	)
@@ -199,14 +229,13 @@ func (l *RaftLog) String() string {
 }
 
 func (l *RaftLog) MetaString() string {
-	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,offset: %v,entry_len: %v}`,
+	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,entry_len: %v}`,
 		l.initIndex,
 		l.initTerm,
 		l.committed,
 		l.stabled,
 		l.applied,
 		l.LastIndex(),
-		l.offset,
 		len(l.entries),
 	)
 	return status
@@ -224,20 +253,27 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 	// all of commited entry include the last commit entry
+	if l.applied > l.committed {
+		panic("raftLog  unAppliedEntis apply > commit ??")
+	}
 	return l.Entries(l.applied+1, l.committed+1)
 }
 
 // Term return the term of the entry in the given index
-// TODO when term will error???
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if i == l.initIndex {
-		return l.initTerm, nil
+	if l.isInRaftLogEntriesRange(i) {
+		entry, err := l.GetEntry(i)
+		if err != nil {
+			return 0, err
+		}
+		return entry.Term, nil
 	}
+	return l.storage.Term(i)
+}
 
-	if err := l.isValidIndex(i); err != nil {
-		return 0, err
-	}
-	return l.entries[i-l.offset].Term, nil
+func (l *RaftLog) clearEntries() {
+	log.Debugf("clearEntries %v", l.String())
+	l.entries = []pb.Entry{}
 }
 
 func (l *RaftLog) Append(e pb.Entry) {
@@ -254,28 +290,22 @@ func (l *RaftLog) appendClientEntries(entries []*pb.Entry, term uint64) uint64 {
 }
 
 // TODO better impl
-func findConflict(followerLog *[]pb.Entry, serverLog *[]pb.Entry, offset, preLogIndex uint64) (bool, uint64, uint64) {
-	//prelogIndex 在log.entries中的真正的index
-	preLogIndexInEntsIndex := preLogIndex - offset
-	i := preLogIndexInEntsIndex + 1 //preLogIndexInEntsIndex 是两者绝对相同部分 下一次比较从preLogIndexInEntsIndex 0 开始
-	var j uint64 = 0
-	logOffset := preLogIndexInEntsIndex
-	var appendEntryOffset uint64 = 0
-	findConflict := false
-
-	for i < uint64(len(*followerLog)) && j < uint64(len(*serverLog)) {
-		entry := (*followerLog)[i]
-		if !(entry.Index == (*serverLog)[j].Index && entry.Term == (*serverLog)[j].Term) {
-			findConflict = true
-			break
-		} else {
-			logOffset = i
-			appendEntryOffset = j
-		}
-		i++
-		j++
+// TODO check all uint64 is necessey
+// return hasConflict,conflictOffset
+//  当hasConflict为true 时  serverLog[conflictOffset]为两者发生冲突的entry
+func findConflict(serverLog *[]pb.Entry, followerLog *[]pb.Entry) (bool, uint64) {
+	if len(*serverLog) != len(*followerLog) {
+		panic("fincConflict server entries len should eq follower entries len")
 	}
-	return findConflict, logOffset, appendEntryOffset
+	if len(*serverLog) == 0 && len(*followerLog) == 0 {
+		return false, uint64(0)
+	}
+	for i := 0; i < len(*serverLog); i++ {
+		if (*serverLog)[i].Index != (*followerLog)[i].Index || (*serverLog)[i].Term != (*followerLog)[i].Term {
+			return true, uint64(i)
+		}
+	}
+	return false, uint64(0)
 }
 
 // TestFollowerAppendEntries2AB
@@ -288,9 +318,24 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 		return 0, fmt.Errorf("could not find this index and term")
 	}
 
+	// 如果实际上server并没有发送 entries过来 那么实际上server和leader已经match 的部分就是prelogIndex本身
+	// 这可能是在确认真正要的发的entries的起始地址
 	if len(entries) == 0 {
 		return preLogIndex, nil
 	}
+
+	// 实际上只可能有4种情况
+	// |--------|
+	//   |---|
+
+	// |--------|
+	//      |---|
+
+	//   |--------|
+	//          |---|
+
+	// |--------|
+	//          |---|
 
 	// TODO ??? we have to do this?
 	serverEntries := []pb.Entry{}
@@ -298,28 +343,47 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 		serverEntries = append(serverEntries, *e)
 	}
 
-	// 1. server发来的Entries正好接到follower Entries的后边
+	// case 4. server发来的Entries正好接到follower Entries的后边
 	if preLogIndex == l.LastIndex() {
 		l.entries = append(l.entries, serverEntries...)
 		return l.entries[len(l.entries)-1].Index, nil
 	}
-	// 如果不是第一种情况 我们就不得不去检查server发来的Entries与follower本身的Entries是否有冲突
-	hasConflict, followerSamedIndex, serverSamedIndex := findConflict(&l.entries, &serverEntries, l.offset, preLogIndex)
 
-	serverEntriesLastIndex := serverEntries[len(serverEntries)-1].Index
-	// 2. follower的Entries完全包含了server发过来的Entries
-	if hasConflict == false && serverEntriesLastIndex <= l.LastIndex() {
-		log.Debugf("tryAppendEntries: conflict false log = flog\n")
-	} else if hasConflict == false && serverEntriesLastIndex > l.LastIndex() {
-		// 2. serverlog与follower entries不冲突 且存在交集
-		log.Debugf("tryAppendEntries: conflict false log = slog + part of flog\n")
-		l.entries = append(l.entries, serverEntries[serverSamedIndex+1:]...)
+	// 还有种方法是 findConflict 直接传入 两个引用和一个长度
+	// 取出两者重复的部分开始比较
+	endIndex := min(preLogIndex+uint64(len(entries)), l.LastIndex())
+	// 从prelog后面的一个entry 一直拿到endIndex
+	followerDuplicateEntries := l.Entries(preLogIndex+1, endIndex+1)
+	// 和followerDuplicateEntries 拿同样多即可
+	serverDuplicateEntries := serverEntries[0 : 0+len(followerDuplicateEntries)]
+
+	hasConflict, conflictOffset := findConflict(&followerDuplicateEntries, &serverDuplicateEntries)
+
+	log.Debugf("hasConflict conflictOffset %v %v ", hasConflict, conflictOffset)
+	if hasConflict {
+
+		// 有冲突时 我们可能需要更改stable Index
+		// serverEntries 与 server duplicate是相同起点的 所以conflictoffset指向的是同一值
+		conflictIndex := serverEntries[conflictOffset].Index
+		l.stabled = min(l.stabled, conflictIndex-1)
+
+		// TODO  question   根据TestFollowerAppendEntries2AB的暗示 似乎不能将entries设成unstable的部分？
+		// 冲突是在log.entries中的
+		if len(l.entries) > 0 && conflictIndex >= l.entries[0].Index {
+			l.entries = l.entries[0 : 0+conflictIndex-l.entries[0].Index]
+			l.entries = append(l.entries, serverEntries[conflictOffset:]...)
+		} else {
+			// 冲突是在storage中的
+			l.entries = serverEntries[conflictOffset:]
+		}
+		return l.entries[len(l.entries)-1].Index, nil
+
 	} else {
-		// 3. entries冲突
-		// 这时我们要重置stable,因为stable有可能也被server的log改变了
-		log.Warnf("tryAppendEntries: conflict true log = part of slog + flog\n")
-		l.entries = append(l.entries[:followerSamedIndex+1], serverEntries...)
-		l.stabled = min(uint64(followerSamedIndex)+l.offset, l.stabled)
+		if l.LastIndex() < serverEntries[len(serverEntries)-1].Index {
+			l.entries = append(l.entries, serverEntries[l.LastIndex()-serverEntries[0].Index+1:]...)
+			return l.entries[len(l.entries)-1].Index, nil
+		}
+		//  follower的log完全包含了server的log 此时 两者确定的匹配的index是server发来的最后一个index
+		return serverEntries[len(serverEntries)-1].Index, nil
 	}
-	return l.entries[len(l.entries)-1].Index, nil
 }

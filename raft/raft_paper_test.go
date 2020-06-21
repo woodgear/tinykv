@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFollowerUpdateTermFromMessage2AA(t *testing.T) {
@@ -367,6 +368,7 @@ func TestLeaderStartReplication2AB(t *testing.T) {
 	r.becomeLeader()
 	commitNoopEntry(r, s)
 	li := r.RaftLog.LastIndex()
+	t.Logf("log li %v", li)
 
 	ents := []*pb.Entry{{Data: []byte("some data")}}
 	r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: ents})
@@ -484,9 +486,9 @@ func TestLeaderAcknowledgeCommit2AB(t *testing.T) {
 func TestLeaderCommitPrecedingEntries2AB(t *testing.T) {
 	tests := [][]pb.Entry{
 		{},
-		{{Term: 2, Index: 1}},
-		{{Term: 1, Index: 1}, {Term: 2, Index: 2}},
-		{{Term: 1, Index: 1}},
+		// {{Term: 2, Index: 1}},
+		// {{Term: 1, Index: 1}, {Term: 2, Index: 2}},
+		// {{Term: 1, Index: 1}},
 	}
 	for i, tt := range tests {
 		storage := NewMemoryStorage()
@@ -510,6 +512,49 @@ func TestLeaderCommitPrecedingEntries2AB(t *testing.T) {
 	}
 }
 
+//  TestFinfConflict2AB test that give server  entries is that has conflict with follower's entries? if it is where?
+func TestFindConflict2AB(t *testing.T) {
+	// serverEntries := []pb.Entry{pb.Entry{Term: 1, Index: 3}}
+	// followerEntries := []pb.Entry{pb.Entry{Term: 1, Index: 3}}
+	// hasConflict, folloerMatch, serverMatch := findConflict(&followerEntries, &serverEntries)
+
+	tests := []struct {
+		serverEnts     []pb.Entry
+		followerEnts   []pb.Entry
+		hasConflict    bool
+		conflictOffset uint64
+	}{
+		{
+			[]pb.Entry{{}},
+			[]pb.Entry{{}},
+			false, uint64(0),
+		},
+		{
+			[]pb.Entry{{Term: 1, Index: 2}},
+			[]pb.Entry{{Term: 1, Index: 2}},
+			false, uint64(0),
+		},
+		{
+			[]pb.Entry{{Term: 2, Index: 2}},
+			[]pb.Entry{{Term: 1, Index: 2}},
+			true, uint64(0),
+		},
+		{
+			[]pb.Entry{{Term: 1, Index: 2}, {Term: 1, Index: 3}},
+			[]pb.Entry{{Term: 1, Index: 2}, {Term: 1, Index: 4}},
+			true, uint64(1),
+		},
+	}
+	for _, tt := range tests {
+		hasConflict, conflictOffset := findConflict(&tt.followerEnts, &tt.serverEnts)
+		assert.Equal(t, hasConflict, tt.hasConflict)
+		assert.Equal(t, conflictOffset, tt.conflictOffset)
+	}
+}
+//  TestTryAppendEnties2AB test that given entries in storage and l.entries and stabled index, with server entries could handle it correctly
+func TestTryAppendEnties2AB(t *testing.T) {
+
+}
 // TestFollowerCommitEntry tests that once a follower learns that a log entry
 // is committed, it applies the entry to its local state machine (in log order).
 // Reference: section 5.3
@@ -612,11 +657,23 @@ func TestFollowerCheckMessageType_MsgAppend2AB(t *testing.T) {
 	}
 }
 
+// 测试storage中的entries 有冲突的情况
+func TestFollowerAppendEntriesStorage2AB(t *testing.T) {
+	// storage := NewMemoryStorage()
+	// storage.Append([]pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}})
+
+
+}
+
 // TestFollowerAppendEntries tests that when AppendEntries RPC is valid,
 // the follower will delete the existing conflict entry and all that follow it,
 // and append any new entries not already in the log.
 // Also, it writes the new entry into stable storage.
 // Reference: section 5.3
+//   默认storage中有 1,1   2,2 两个entries
+//  使用index term 作为preLogIndex term ents 作为 data
+//  检测log.entries 是否与wents 相同
+// unstableEntries 是否与 wunstable 相同
 func TestFollowerAppendEntries2AB(t *testing.T) {
 	tests := []struct {
 		index, term uint64
@@ -627,6 +684,7 @@ func TestFollowerAppendEntries2AB(t *testing.T) {
 		{
 			2, 2,
 			[]*pb.Entry{{Term: 3, Index: 3}},
+			// TODO question 直接就是 3,3 难道不行吗？
 			[]*pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}, {Term: 3, Index: 3}},
 			[]*pb.Entry{{Term: 3, Index: 3}},
 		},
@@ -662,7 +720,8 @@ func TestFollowerAppendEntries2AB(t *testing.T) {
 			wents = append(wents, *ent)
 		}
 		if g := r.RaftLog.entries; !reflect.DeepEqual(g, wents) {
-			t.Errorf("#%d: ents = %+v, want %+v", i, g, wents)
+			t.Errorf("#%d: ents = %+v, want %+v", i, ShowEntries(g), ShowEntries(wents))
+			return
 		}
 		var wunstable []pb.Entry
 		if tt.wunstable != nil {

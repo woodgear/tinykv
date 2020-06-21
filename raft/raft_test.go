@@ -740,7 +740,6 @@ func TestAllServerStepdown2AB(t *testing.T) {
 			if msgType == pb.MessageType_MsgRequestVote {
 				wlead = None
 			}
-			//TODO update point
 			if sm.Lead != wlead {
 				t.Errorf("#%d, sm.Lead = %d, want %d", i, sm.Lead, wlead)
 				return
@@ -905,6 +904,56 @@ func TestDisruptiveFollower2AA(t *testing.T) {
 
 // When the leader receives a heartbeat tick, it should
 // send a MessageType_MsgHeartbeat with m.Index = 0, m.LogTerm=0 and empty entries.
+// tests the output of the state machine when receiving MessageType_MsgBeat
+func TestRecvMessageType_MsgBeat2AA(t *testing.T) {
+	tests := []struct {
+		state StateType
+		wMsg  int
+	}{
+		{StateLeader, 2},
+		// candidate and follower should ignore MessageType_MsgBeat
+		{StateCandidate, 0},
+		{StateFollower, 0},
+	}
+
+	for i, tt := range tests {
+		sm := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
+		sm.RaftLog = newLog(&MemoryStorage{ents: []pb.Entry{{}, {Index: 1, Term: 0}, {Index: 2, Term: 1}}})
+		sm.Term = 1
+		sm.State = tt.state
+		sm.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
+
+		msgs := sm.readMessages()
+		if len(msgs) != tt.wMsg {
+			t.Errorf("%d: len(msgs) = %d, want %d", i, len(msgs), tt.wMsg)
+		}
+		for _, m := range msgs {
+			if m.MsgType != pb.MessageType_MsgHeartbeat {
+				t.Errorf("%d: msg.Msgtype = %v, want %v", i, m.MsgType, pb.MessageType_MsgHeartbeat)
+			}
+		}
+	}
+}
+
+func TestLeaderIncreaseNext2AB(t *testing.T) {
+	previousEnts := []pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}, {Term: 1, Index: 3}}
+	// previous entries + noop entry + propose + 1
+	wnext := uint64(len(previousEnts)) + 1 + 1 + 1
+
+	storage := NewMemoryStorage()
+	storage.Append(previousEnts)
+	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
+	nt := newNetwork(sm, nil, nil)
+	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
+
+	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("somedata")}}})
+
+	p := sm.Prs[2]
+	if p.Next != wnext {
+		t.Errorf("next = %d, want %d", p.Next, wnext)
+	}
+}
+
 func TestBcastBeat2B(t *testing.T) {
 	offset := uint64(1000)
 	// make a state machine with log.offset = 1000
@@ -963,55 +1012,13 @@ func TestBcastBeat2B(t *testing.T) {
 	}
 }
 
-// tests the output of the state machine when receiving MessageType_MsgBeat
-func TestRecvMessageType_MsgBeat2AA(t *testing.T) {
-	tests := []struct {
-		state StateType
-		wMsg  int
-	}{
-		{StateLeader, 2},
-		// candidate and follower should ignore MessageType_MsgBeat
-		{StateCandidate, 0},
-		{StateFollower, 0},
-	}
-
-	for i, tt := range tests {
-		sm := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
-		sm.RaftLog = newLog(&MemoryStorage{ents: []pb.Entry{{}, {Index: 1, Term: 0}, {Index: 2, Term: 1}}})
-		sm.Term = 1
-		sm.State = tt.state
-		sm.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
-
-		msgs := sm.readMessages()
-		if len(msgs) != tt.wMsg {
-			t.Errorf("%d: len(msgs) = %d, want %d", i, len(msgs), tt.wMsg)
-		}
-		for _, m := range msgs {
-			if m.MsgType != pb.MessageType_MsgHeartbeat {
-				t.Errorf("%d: msg.Msgtype = %v, want %v", i, m.MsgType, pb.MessageType_MsgHeartbeat)
-			}
-		}
-	}
-}
-
-func TestLeaderIncreaseNext2AB(t *testing.T) {
-	previousEnts := []pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}, {Term: 1, Index: 3}}
-	// previous entries + noop entry + propose + 1
-	wnext := uint64(len(previousEnts)) + 1 + 1 + 1
-
-	storage := NewMemoryStorage()
-	storage.Append(previousEnts)
-	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
-	nt := newNetwork(sm, nil, nil)
-	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
-
-	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("somedata")}}})
-
-	p := sm.Prs[2]
-	if p.Next != wnext {
-		t.Errorf("next = %d, want %d", p.Next, wnext)
-	}
-}
+// advance 表明unstable的entry被stable了因此当log获取entries时(leader 发送msgAppend), 实际上有可能一部份从log.entries field中获取
+// 一部分从storage的entries中获取 这个测试的目的就在于测试在不同的情况下entries的正常使用
+// func TestLogEntries2B(t *testing.T) {
+// 	storage := NewMemoryStorage()
+// 	storage.Append([]pb.Entry{})
+// 	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
+// }
 
 func TestRestoreSnapshot2C(t *testing.T) {
 	s := pb.Snapshot{

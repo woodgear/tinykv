@@ -14,6 +14,7 @@ import (
 	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/config"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
 	"github.com/pingcap-incubator/tinykv/kv/storage/raft_storage"
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
@@ -220,9 +221,11 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 			panic(fmt.Sprintf("can't get leader of region %d", regionID))
 		}
 		request.Header.Peer = leader
+		log.Debugf("xxx  call command " )
 		resp, txn := c.CallCommand(request, 1*time.Second)
+		log.Debugf("CallCommandOnLeader %v cmd %s",leader,util.ShowRaftCmdRequest(request) )
 		if resp == nil {
-			log.Debugf("GenericTest can't call command %s on leader %d of region %d", request.String(), leader.GetId(), regionID)
+			log.Debugf("CallCommandOnLeader GenericTest can't call command %s on leader %d of region %d", request.String(), leader.GetId(), regionID)
 			newLeader := c.LeaderOfRegion(regionID)
 			if leader == newLeader {
 				region, _, err := c.schedulerClient.GetRegionByID(context.TODO(), regionID)

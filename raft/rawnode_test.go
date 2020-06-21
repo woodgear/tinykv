@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/stretchr/testify/assert"
 )
 
 type ignoreSizeHintMemStorage struct {
@@ -157,6 +158,66 @@ func TestRawNodeProposeAddDuplicateNode3A(t *testing.T) {
 	}
 }
 
+func TestRaftAppend2B2(t *testing.T) {
+	storage := NewMemoryStorage()
+	storage.Append([]pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}})
+	r := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
+
+	if !reflect.DeepEqual(r.RaftLog.Entries(1, 3), []pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}}) {
+		t.Fatalf("should eq")
+	}
+	r.RaftLog.entries = []pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}}
+	if !reflect.DeepEqual(r.RaftLog.Entries(1, 3), []pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}}) {
+		t.Fatalf("should eq")
+	}
+}
+func TestRaftAppend2B1(t *testing.T) {
+	storage := NewMemoryStorage()
+	log.Debugf("storage ents %v", ShowEntries(storage.ents))
+	rawNode, err := NewRawNode(newTestConfig(1, []uint64{1}, 10, 1, storage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawNode.Campaign()
+	log.Debugf("raftlog ents %v", ShowEntries(rawNode.Raft.RaftLog.entries))
+
+	if !reflect.DeepEqual(rawNode.Raft.RaftLog.entries, []pb.Entry{{Term: 1, Index: 1}}) {
+		t.Error("fail ")
+	}
+	rd := rawNode.Ready()
+	storage.Append(rd.UnStableEntry)
+	rawNode.Advance(rd)
+	if len(rawNode.Raft.RaftLog.entries) != 0 {
+		t.Error("after advance entries should be empty")
+	}
+	ents := rawNode.Raft.RaftLog.Entries(1, 2)
+
+	if !reflect.DeepEqual(ents, []pb.Entry{{Term: 1, Index: 1}}) {
+		t.Error("fail ")
+	}
+	rawNode.Propose([]byte("fooxx"))
+	if !rawNode.HasReady() {
+		t.Error("should ready after propose")
+	}
+	rd = rawNode.Ready()
+	storage.Append(rd.UnStableEntry)
+
+	log.Debugf("show ready %v", rd.String())
+	rawNode.Advance(rd)
+
+	if len(rawNode.Raft.RaftLog.entries) != 0 {
+		t.Error("after advance entries should be empty")
+	}
+	log.Debugf("mem storage %v", ShowEntries(storage.ents))
+	lastIndex := rawNode.Raft.RaftLog.LastIndex()
+	assert.Equal(t, lastIndex, uint64(2), "last index should be 2")
+	ents = rawNode.Raft.RaftLog.Entries(1, lastIndex+1)
+	log.Debugf("ents %v", ents)
+	assert.Equal(t, len(ents), 2, "after compaign and propose  all ents len should be 2")
+	log.Debugf("after advance raftlog ents %v", ShowEntries(rawNode.Raft.RaftLog.entries))
+
+}
+
 // TestRawNodeStart ensures that a node can be started correctly, and can accept and commit
 // proposals.
 func TestRawNodeStart2AC(t *testing.T) {
@@ -203,7 +264,7 @@ func TestRawNodeRestart2AC(t *testing.T) {
 	}
 	st := pb.HardState{Term: 1, Commit: 1}
 	want := Ready{
-		HardState: st,
+		HardState:     st,
 		UnStableEntry: []pb.Entry{},
 		// commit up to commit index in st
 		UnApplyEntry: entries[:st.Commit],

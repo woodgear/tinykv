@@ -141,7 +141,7 @@ func IsEntriesIndexTermEqual(left, right []pb.Entry) bool {
 }
 
 func ShowMsg(msg pb.Message) string {
-	return fmt.Sprintf("{type %v From %v to %v entries %+v commit %v},", msg.MsgType, msg.From, msg.To, msg.Entries, msg.Commit)
+	return fmt.Sprintf("{type %v From %v to %v entries %+v commit %v},", msg.MsgType, msg.From, msg.To, ShowPtrEntries(msg.Entries), msg.Commit)
 }
 
 func ShowMsgs(msgs []pb.Message) string {
@@ -157,6 +157,21 @@ func ShowMsgs(msgs []pb.Message) string {
 
 func ShowEntry(e pb.Entry) string {
 	return fmt.Sprintf("Entry {index: %v, term: %v, data-len:%v }", e.Index, e.Term, len(e.Data))
+}
+
+func ShowEntryWithMsg(e pb.Entry) string {
+	return fmt.Sprintf("Entry {index: %v, term: %v, data:%v }", e.Index, e.Term, e.Data)
+}
+
+func ShowEntriesWithMsg(ents []pb.Entry) string {
+	if len(ents) == 0 {
+		return "Empty"
+	}
+	s := "["
+	for _, e := range ents {
+		s = fmt.Sprintf("%v %v,", s,ShowEntryWithMsg(e))
+	}
+	return fmt.Sprintf("%s]", s)
 }
 
 func ShowEntries(ents []pb.Entry) string {

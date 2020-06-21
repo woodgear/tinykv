@@ -17,7 +17,6 @@ import (
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
-	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
 	"github.com/pingcap-incubator/tinykv/raft"
 	"github.com/pingcap/errors"
@@ -310,7 +309,7 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
 	// Your Code Here (2B).
 	if len(entries) != 0 {
-		log.Debugf("peer_storage append len %v", len(entries))
+		log.Debugf("raft_id: %v,peer_storage append len %v", ps.Tag, len(entries))
 	}
 
 	if len(entries) != 0 {
@@ -324,7 +323,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	// 实际上不用特意去做任何事？
 	for _, e := range entries {
 		key := meta.RaftLogKey(ps.region.GetId(), e.Index)
-		log.Debugf("stable entry  region_id %v idx %v key %v value %v", ps.region.GetId(), e.Index, key, &e)
+		log.Debugf("raft_id: %v ,stable entry  region_id %v idx %v key %v ", ps.Tag, ps.region.GetId(), e.Index, key)
 		raftWB.SetMeta(key, &e)
 	}
 	return nil
@@ -342,7 +341,21 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
-	return nil, nil
+
+	applyResult := &ApplySnapResult{}
+	applyNotify := make(chan bool)
+	ps.regionSched <- runner.RegionTaskApply{
+		SnapMeta: snapshot.Metadata,
+		Notifier: applyNotify,
+	}
+	applyRes := <-applyNotify
+	if applyRes {
+
+	} else {
+
+	}
+
+	return applyResult, nil
 }
 
 // Save memory states to disk.
@@ -352,78 +365,29 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	// Your Code Here (2B/2C).
 
 	raftWb := new(engine_util.WriteBatch)
+	kvWb := new(engine_util.WriteBatch)
 	ps.Append(ready.GetUnStableEntry(), raftWb)
 
 	// TODO question 更新ps.raftState的操作被放到了两个函数中？
 	hardState := ready.HardState
 	ps.raftState.HardState = &hardState
+
 	// 这里的检查有何意义？
 	if !raft.IsEmptyHardState(hardState) || len(ready.UnStableEntry) != 0 {
 		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
 	}
+	// ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
+
 	error := ps.Engines.WriteRaft(raftWb)
+	if error != nil {
+		return nil, error
+	}
+	error = ps.Engines.WriteKV(kvWb)
 	if error != nil {
 		return nil, error
 	}
 	// ps.ApplySnapshot(&ready.Snapshot,wb)
 	return nil, nil
-}
-
-func (ps *PeerStorage) ProcessRequest(reqs raft_cmdpb.RaftCmdRequest, isLeader bool) (*raft_cmdpb.RaftCmdResponse, error) {
-	resp := new(raft_cmdpb.RaftCmdResponse)
-	resp.Header = new(raft_cmdpb.RaftResponseHeader)
-	resp.Responses = []*raft_cmdpb.Response{}
-	for _, req := range reqs.Requests {
-		switch req.CmdType {
-		case raft_cmdpb.CmdType_Get:
-			{
-				if !isLeader {
-					return nil, nil
-				}
-				getReq := req.Get
-				getResp := new(raft_cmdpb.GetResponse)
-				val, errror := engine_util.GetCF(ps.Engines.Kv, getReq.Cf, getReq.Key)
-				if errror != nil {
-					return nil, errror
-				}
-				getResp.Value = val
-				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Get, Get: getResp})
-			}
-		case raft_cmdpb.CmdType_Delete:
-			{
-				deleteReq := req.Delete
-				deleteResp := new(raft_cmdpb.DeleteResponse)
-				errror := engine_util.DeleteCF(ps.Engines.Kv, deleteReq.Cf, deleteReq.Key)
-				if errror != nil {
-					return nil, errror
-				}
-				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Delete, Delete: deleteResp})
-
-			}
-		case raft_cmdpb.CmdType_Snap:
-			{
-
-				if !isLeader {
-					return nil, nil
-				}
-				// snap req的返回值实际使用的是挂在cb上的txn
-				snapResp := new(raft_cmdpb.SnapResponse)
-				snapResp.Region = ps.region
-				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Snap, Snap: snapResp})
-			}
-		case raft_cmdpb.CmdType_Put:
-			{
-				putReq := req.Put
-				putResp := new(raft_cmdpb.PutResponse)
-				errror := engine_util.PutCF(ps.Engines.Kv, putReq.Cf, putReq.Key, putReq.Value)
-				if errror != nil {
-					return nil, errror
-				}
-				resp.Responses = append(resp.Responses, &raft_cmdpb.Response{CmdType: raft_cmdpb.CmdType_Put, Put: putResp})
-			}
-		}
-	}
-	return resp, nil
 }
 
 func (ps *PeerStorage) ClearData() {
