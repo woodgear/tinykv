@@ -68,7 +68,7 @@ type SimpleStorageReader struct {
 func (self *SimpleStorageReader) GetCF(cf string, key []byte) ([]byte, error) {
 	v, err := engine_util.GetCF(self.db, cf, key)
 	if err == ErrKeyNotFound {
-		return nil, nil
+		return nil,nil
 	}
 	return v, err
 }

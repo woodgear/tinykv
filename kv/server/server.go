@@ -5,7 +5,6 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/coprocessor"
 
-	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/storage"
 	"github.com/pingcap-incubator/tinykv/kv/storage/raft_storage"
 	"github.com/pingcap-incubator/tinykv/kv/transaction/latches"
@@ -39,14 +38,13 @@ func NewServer(storage storage.Storage) *Server {
 
 // Raw API.
 func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kvrpcpb.RawGetResponse, error) {
-
 	reader, err := server.storage.Reader(nil)
 	if err != nil {
 		return nil, err
 	}
 
 	val, err := reader.GetCF(req.Cf, req.Key)
-	if err == badger.ErrKeyNotFound {
+	if val == nil {
 		response := new(kvrpcpb.RawGetResponse)
 		response.NotFound = true
 		return response, nil
