@@ -1020,6 +1020,9 @@ func TestBcastBeat2B(t *testing.T) {
 // 	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
 // }
 
+
+// 这个测试暗示出handlesnapshot 之后会立即更改lastIndex？？？
+// 在handlesnapshot时 如果snapshot的index大于当前的lastindex  要更正当前的lastindex
 func TestRestoreSnapshot2C(t *testing.T) {
 	s := pb.Snapshot{
 		Metadata: &pb.SnapshotMetadata{
@@ -1045,6 +1048,7 @@ func TestRestoreSnapshot2C(t *testing.T) {
 	}
 }
 
+// 忽视那些小于自己index的snapshot
 func TestRestoreIgnoreSnapshot2C(t *testing.T) {
 	previousEnts := []pb.Entry{{Term: 1, Index: 1}, {Term: 1, Index: 2}, {Term: 1, Index: 3}}
 	storage := NewMemoryStorage()
@@ -1068,6 +1072,7 @@ func TestRestoreIgnoreSnapshot2C(t *testing.T) {
 	}
 }
 
+// 当收到reject的response时 发现要发送snapshot 应当尝试去发送下snapshot
 func TestProvideSnap2C(t *testing.T) {
 	// restore the state machine from a snapshot so it has a compacted log and a snapshot
 	s := pb.Snapshot{
@@ -1094,6 +1099,7 @@ func TestProvideSnap2C(t *testing.T) {
 		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
 	}
 	m := msgs[0]
+	// memsnapshot will neveer delay
 	if m.MsgType != pb.MessageType_MsgSnapshot {
 		t.Errorf("m.MsgType = %v, want %v", m.MsgType, pb.MessageType_MsgSnapshot)
 	}
@@ -1121,12 +1127,15 @@ func TestSlowNodeRestore2C(t *testing.T) {
 	nt := newNetwork(nil, nil, nil)
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
+	// 将id为3的node 隔离 
 	nt.isolate(3)
 	for j := 0; j <= 100; j++ {
 		nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 	}
 	lead := nt.peers[1].(*Raft)
 	nextEnts(lead, nt.storage[1])
+	t.Logf("applied to %+v\n", lead.RaftLog.applied)
+	// 准备snapshot
 	nt.storage[1].CreateSnapshot(lead.RaftLog.applied, &pb.ConfState{Nodes: nodes(lead)}, nil)
 	nt.storage[1].Compact(lead.RaftLog.applied)
 

@@ -100,8 +100,22 @@ func newLog(storage Storage) *RaftLog {
 	return l
 }
 
-// LastIndex return the last index of the lon entries
+// snapshot 按照我的理解是在rawnode 的ready中真正被存到storage中的
+// 如果在此时根据index term 更改了的话 问题是 如果有一个请求想要获取那些还在snap中的数据
+// 就会报错
+func (l *RaftLog) handleSnapshot(snapshot *pb.Snapshot) {
+	l.pendingSnapshot = snapshot
+
+}
+
+// LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
+	//  如果有 pendingSnapshot  那么 pendingSnapshot中的index必然是最大的
+
+	if l.pendingSnapshot != nil {
+		return l.pendingSnapshot.Metadata.Index
+	}
+
 	if len(l.entries) == 0 {
 		storageLastIndex, err := l.storage.LastIndex()
 		// TODO fix panic
@@ -122,13 +136,6 @@ func (l *RaftLog) GetTerm(index uint64) uint64 {
 }
 
 func (l *RaftLog) isValidIndex(index uint64) error {
-	firstIndex, err := l.storage.FirstIndex()
-	if err != nil {
-		return err
-	}
-	if index < firstIndex {
-		return fmt.Errorf("invalid index index %v firstIndex %v", index, firstIndex)
-	}
 	lastIndex := l.LastIndex()
 	if index > lastIndex {
 		return fmt.Errorf("invalid index index %v lastIndex %v", index, lastIndex)
@@ -139,6 +146,7 @@ func (l *RaftLog) isValidIndex(index uint64) error {
 func (l *RaftLog) GetEntry(index uint64) (*pb.Entry, error) {
 	err := l.isValidIndex(index)
 	if err != nil {
+		log.Infof("not valid\n", )
 		return nil, err
 	}
 	entryPtr := l.getEntryFromRaftLogIfExist(index)
@@ -171,7 +179,7 @@ func (l *RaftLog) isInRaftLogEntriesRange(index uint64) bool {
 // 将raftlog 视为数组
 // 上层raft 算法模块查询Entries 一般是sendAppend时要获取数据
 // 应当会有报错 表示Entries已经被gc了
-func (l *RaftLog) Entries(low, high uint64) []pb.Entry {
+func (l *RaftLog) Entries(low, high uint64) ([]pb.Entry, error) {
 	if low > high {
 		panic(fmt.Errorf("Entries low>hight %v %v fail", low, high))
 	}
@@ -180,21 +188,25 @@ func (l *RaftLog) Entries(low, high uint64) []pb.Entry {
 		ent, err := l.GetEntry(i)
 		// TODO return error?
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		ents = append(ents, *ent)
 	}
-	return ents
+	return ents, nil
 }
 
 // PtrEntries same as Entries but return []*pb.Entry instead of []pb.Entry
-func (l *RaftLog) PtrEntries(low, hight uint64) []*pb.Entry {
-	entries := l.Entries(low, hight)
+func (l *RaftLog) PtrEntries(low, hight uint64) ([]*pb.Entry, error) {
+	entries, err := l.Entries(low, hight)
+	if err != nil {
+		return nil, err
+	}
+
 	ptrEntries := []*pb.Entry{}
 	for i, _ := range entries {
 		ptrEntries = append(ptrEntries, &entries[i])
 	}
-	return ptrEntries
+	return ptrEntries, nil
 }
 
 // log中是否为空 （初始化时）
@@ -243,7 +255,14 @@ func (l *RaftLog) MetaString() string {
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	return l.Entries(l.stabled+1, l.LastIndex()+1)
+	ents, err := l.Entries(l.stabled+1, l.LastIndex()+1)
+	if err != nil {
+		panic(err)
+	}
+	return ents
+}
+func (l *RaftLog) Snapshot() (pb.Snapshot, error) {
+	return l.storage.Snapshot()
 }
 
 // nextEnts returns all the committed but not applied entries
@@ -256,12 +275,25 @@ func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 	if l.applied > l.committed {
 		panic("raftLog  unAppliedEntis apply > commit ??")
 	}
-	return l.Entries(l.applied+1, l.committed+1)
+	ents, err := l.Entries(l.applied+1, l.committed+1)
+	if err != nil {
+		panic(err)
+	}
+	return ents
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
+	if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
+		return l.pendingSnapshot.Metadata.Term, nil
+	}
+
+	log.Infof("term %v is in range %+v\n",i, len(l.entries))
+	if len(l.entries) != 0 {
+		log.Infof("term range %v %v\n", l.entries[0].Index, l.entries[len(l.entries)-1].Index)
+	}
 	if l.isInRaftLogEntriesRange(i) {
+		log.Infof("in rage \n")
 		entry, err := l.GetEntry(i)
 		if err != nil {
 			return 0, err
@@ -352,7 +384,11 @@ func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entrie
 	// 取出两者重复的部分开始比较
 	endIndex := min(preLogIndex+uint64(len(entries)), l.LastIndex())
 	// 从prelog后面的一个entry 一直拿到endIndex
-	followerDuplicateEntries := l.Entries(preLogIndex+1, endIndex+1)
+
+	followerDuplicateEntries, err := l.Entries(preLogIndex+1, endIndex+1)
+	if err != nil {
+		panic(err)
+	}
 	// 和followerDuplicateEntries 拿同样多即可
 	serverDuplicateEntries := serverEntries[0 : 0+len(followerDuplicateEntries)]
 

@@ -401,11 +401,12 @@ func (r *Raft) sendAppendToAll() {
 // current commit index to the given peer. Returns true if a message was sent.
 // TODO 优化1. 发送空的entries直到匹配正确 优化2. 使用二分查找来匹配
 // TODO return true if a message was sent ???
+// 当entries被compact且snapshoot没有生成时 直接return false
 func (r *Raft) sendAppend(to uint64) bool {
 	if r.RaftLog.IsEmpty() {
 		return false
 	}
-	// match := r.Prs[to].Match
+
 	next := r.Prs[to].Next
 	lastIndex := r.GetLastIndex()
 	if next > lastIndex {
@@ -418,7 +419,20 @@ func (r *Raft) sendAppend(to uint64) bool {
 		log.Warnf("is this normal????")
 		return false
 	}
-	entries := r.RaftLog.PtrEntries(next, lastIndex+1)
+	log.Infof("raft_id: %v entries %v %v sendAppend to %v\n", r.id, next, lastIndex+1,to)
+	entries, err := r.RaftLog.PtrEntries(next, lastIndex+1)
+	if err == ErrCompacted {
+		snapshot, err := r.RaftLog.Snapshot()
+		if err == ErrSnapshotTemporarilyUnavailable {
+			return false
+		}
+		r.sendSnapshot(to, snapshot)
+		return true
+	}
+
+	if err != nil {
+		panic(err)
+	}
 	preLogIndex := next - 1
 
 	preLogTerm, error := r.RaftLog.Term(preLogIndex)
@@ -436,6 +450,18 @@ func (r *Raft) sendAppend(to uint64) bool {
 		LeaderCommit: r.getCommitedID(),
 	})
 	return true
+}
+
+func (r *Raft) sendSnapshot(to uint64, snap pb.Snapshot) {
+	m := pb.Message{
+		MsgType:  pb.MessageType_MsgSnapshot,
+		To:       to,
+		From:     r.id,
+		Term:     r.Term,
+		Commit:   r.getCommitedID(),
+		Snapshot: &snap,
+	}
+	r.send(m)
 }
 
 // TODO why return error
@@ -479,7 +505,10 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 		if r.Prs[m.From].Next > m.Index && m.Index != 0 {
 			r.Prs[m.From].Next = m.Index
 		} else {
-			r.Prs[m.From].Next--
+			// TODO werid
+			if r.Prs[m.From].Next != 0 {
+				r.Prs[m.From].Next--
+			}
 		}
 		r.sendAppend(m.From)
 	} else {
@@ -627,7 +656,7 @@ func (r *Raft) checkCommit() (bool, uint64) {
 	}
 	sort.Slice(matchedIndex, func(i, j int) bool { return matchedIndex[i] < matchedIndex[j] })
 	halfCount := uint64((len(r.Prs)+1)/2) - 1
-	log.Debugf("raft_id: %v, check commit matchedIndex %v prs %+v half count %v total count %v", r.id, matchedIndex,r.Prs, halfCount, len(r.Prs))
+	log.Debugf("raft_id: %v, check commit matchedIndex %v prs %+v half count %v total count %v", r.id, matchedIndex, r.Prs, halfCount, len(r.Prs))
 
 	if matchedIndex[halfCount] > r.getCommitedID() {
 		return true, matchedIndex[halfCount]
@@ -688,14 +717,6 @@ func (r *Raft) becomeLeader() {
 	//TODO 直接在这里step一个msg?
 	r.Prs[r.id].Match = r.GetLastIndex()
 	r.Prs[r.id].Next = r.Prs[r.id].Match + 1
-
-	// check leader entries
-	first := r.RaftLog.initIndex
-
-	last := r.RaftLog.LastIndex()
-
-	entries := r.RaftLog.Entries(first+1, last+1)
-	log.Debugf("raft_id: %v, tag: check-leader-entries %v", r.id, ShowEntriesWithMsg(entries))
 }
 
 func (r *Raft) sendVoteToAll() {
@@ -803,7 +824,21 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 	// r.RaftLog.appendClientEntries(m.Entries, r.Term)
 	// r.sendAppendToAll()
-	r.RaftLog.pendingSnapshot = m.Snapshot
+	if m.Snapshot.Metadata.Index > r.RaftLog.LastIndex() {
+		r.Lead = m.From
+		r.updateNodes(m.Snapshot.Metadata.ConfState.Nodes)
+		r.RaftLog.handleSnapshot(m.Snapshot)
+	} else {
+		//TODO 在else的情况中 有没有可能是follower的虚假entryies导致
+	}
+	//TODO  发送response
+
+}
+
+func (r *Raft) updateNodes(nodes []uint64) {
+	for _, prsID := range nodes {
+		r.Prs[prsID] = &Progress{}
+	}
 }
 
 // addNode add a new node to raft group
