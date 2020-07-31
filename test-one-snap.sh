@@ -1,0 +1,1 @@
+ tmux kill-pane -a -t 0 && GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run TestOneSnapshot2C|nl |tee log.log |./scripts/stream-log-dispatcher/index.js |rg '(leader-view|gc|snap|OneSnapshot2C|panic|error|warn)'
