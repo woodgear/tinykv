@@ -112,9 +112,9 @@ func (l *RaftLog) handleSnapshot(snapshot *pb.Snapshot) {
 func (l *RaftLog) LastIndex() uint64 {
 	//  如果有 pendingSnapshot  那么 pendingSnapshot中的index必然是最大的
 
-	if l.pendingSnapshot != nil {
-		return l.pendingSnapshot.Metadata.Index
-	}
+	// if l.pendingSnapshot != nil {
+	// 	return l.pendingSnapshot.Metadata.Index
+	// }
 
 	if len(l.entries) == 0 {
 		storageLastIndex, err := l.storage.LastIndex()
@@ -284,16 +284,15 @@ func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
-		return l.pendingSnapshot.Metadata.Term, nil
-	}
+	// if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
+	// 	return l.pendingSnapshot.Metadata.Term, nil
+	// }
 
-	log.Infof("term %v is in range %+v\n",i, len(l.entries))
 	if len(l.entries) != 0 {
 		log.Infof("term range %v %v\n", l.entries[0].Index, l.entries[len(l.entries)-1].Index)
 	}
+	
 	if l.isInRaftLogEntriesRange(i) {
-		log.Infof("in rage \n")
 		entry, err := l.GetEntry(i)
 		if err != nil {
 			return 0, err

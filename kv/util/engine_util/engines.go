@@ -32,13 +32,10 @@ func NewEngines(kvEngine, raftEngine *badger.DB, kvPath, raftPath string) *Engin
 }
 
 func (en *Engines) WriteKV(wb *WriteBatch) error {
-
-	log.Debugf("tag: count write to kv %v",wb.Len())
 	return wb.WriteToDB(en.Kv)
 }
 
 func (en *Engines) WriteRaft(wb *WriteBatch) error {
-	log.Debugf("tag: count write to raft %v",wb.Len())
 	return wb.WriteToDB(en.Raft)
 }
 

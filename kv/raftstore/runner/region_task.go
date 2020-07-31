@@ -79,7 +79,10 @@ type snapContext struct {
 
 // handleGen handles the task of generating snapshot of the Region.
 func (snapCtx *snapContext) handleGen(regionId uint64, notifier chan<- *eraftpb.Snapshot) {
+	log.Infof("tag: snapshot log: start dosnapshot\n")
 	snap, err := doSnapshot(snapCtx.engines, snapCtx.mgr, regionId)
+	log.Infof("tag: snapshot log: end dosnapshot idx %v \n", snap.Metadata.Index)
+
 	if err != nil {
 		log.Errorf("failed to generate snapshot!!!, [regionId: %d, err : %v]", regionId, err)
 	} else {
@@ -89,31 +92,32 @@ func (snapCtx *snapContext) handleGen(regionId uint64, notifier chan<- *eraftpb.
 
 // applySnap applies snapshot data of the Region.
 func (snapCtx *snapContext) applySnap(regionId uint64, startKey, endKey []byte, snapMeta *eraftpb.SnapshotMetadata) error {
-	log.Infof("begin apply snap data. [regionId: %d]", regionId)
+	log.Infof("tag:snap, log: begin apply snap data. [regionId: %d]", regionId)
 
 	// cleanUpOriginData clear up the region data before applying snapshot
 	snapCtx.cleanUpRange(regionId, startKey, endKey)
-
+	log.Infof("raft_id: %v,tag: snap,log: \n", regionId)
 	snapKey := snap.SnapKey{RegionID: regionId, Index: snapMeta.Index, Term: snapMeta.Term}
 	snapCtx.mgr.Register(snapKey, snap.SnapEntryApplying)
 	defer snapCtx.mgr.Deregister(snapKey, snap.SnapEntryApplying)
-
+	log.Infof("raft_id: %v,tag: snap,log: \n", regionId)
 	snapshot, err := snapCtx.mgr.GetSnapshotForApplying(snapKey)
 	if err != nil {
 		return errors.New(fmt.Sprintf("missing snapshot file %s", err))
 	}
-
+	log.Infof("raft_id: %v,tag: snap,log: \n", regionId)
 	t := time.Now()
 	applyOptions := snap.NewApplyOptions(snapCtx.engines.Kv, &metapb.Region{
 		Id:       regionId,
 		StartKey: startKey,
 		EndKey:   endKey,
 	})
+	log.Infof("raft_id: %v,tag: snap,log: \n", regionId)
 	if err := snapshot.Apply(*applyOptions); err != nil {
 		return err
 	}
-
-	log.Infof("applying new data. [regionId: %d, timeTakes: %v]", regionId, time.Now().Sub(t))
+	log.Infof("raft_id: %v,tag: snap,log: \n", regionId)
+	log.Infof("tag:snap, log: applying new data. [regionId: %d, timeTakes: %v]", regionId, time.Now().Sub(t))
 	return nil
 }
 
@@ -161,11 +165,12 @@ func getAppliedIdxTermForSnapshot(raft *badger.DB, kv *badger.Txn, regionId uint
 }
 
 func doSnapshot(engines *engine_util.Engines, mgr *snap.SnapManager, regionId uint64) (*eraftpb.Snapshot, error) {
-	log.Debugf("begin to generate a snapshot. [regionId: %d]", regionId)
+	log.Debugf("tag:snap,begin to generate a snapshot. [regionId: %d]", regionId)
 
 	txn := engines.Kv.NewTransaction(false)
 
 	index, term, err := getAppliedIdxTermForSnapshot(engines.Raft, txn, regionId)
+	log.Debugf("tag:snap,dosnapshot idx is %v. [regionId: %d]", index, regionId)
 	if err != nil {
 		return nil, err
 	}

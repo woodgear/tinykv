@@ -147,7 +147,7 @@ func (c *Cluster) Shutdown() {
 		engine.Close()
 	}
 	for _, dir := range c.dirs {
-		log.Debugf("tag:life log: remove all dir %v",dir)
+		log.Debugf("tag:life log: remove all dir %v", dir)
 		os.RemoveAll(dir)
 	}
 }
@@ -221,9 +221,9 @@ func (c *Cluster) CallCommandOnLeader(request *raft_cmdpb.RaftCmdRequest, timeou
 			panic(fmt.Sprintf("can't get leader of region %d", regionID))
 		}
 		request.Header.Peer = leader
-		log.Debugf("xxx  call command " )
+		log.Debugf("xxx  call command ")
 		resp, txn := c.CallCommand(request, 1*time.Second)
-		log.Debugf("CallCommandOnLeader %v cmd %s",leader,util.ShowRaftCmdRequest(request) )
+		log.Debugf("CallCommandOnLeader %v cmd %s", leader, util.ShowRaftCmdRequest(request))
 		if resp == nil {
 			log.Debugf("CallCommandOnLeader GenericTest can't call command %s on leader %d of region %d", request.String(), leader.GetId(), regionID)
 			newLeader := c.LeaderOfRegion(regionID)
@@ -305,7 +305,7 @@ func (c *Cluster) MustPut(key, value []byte) {
 }
 
 func (c *Cluster) MustPutCF(cf string, key, value []byte) {
-	log.Debugf("must put %s %v", cf, key)
+	log.Debugf("must put cf %s key %v %s", cf, key, string(key))
 	req := NewPutCfCmd(cf, key, value)
 	resp, _ := c.Request(key, []*raft_cmdpb.Request{req}, 5*time.Second)
 	if resp.Header.Error != nil {

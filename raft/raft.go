@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	_ "fmt"
 	"math/rand"
 	"sort"
@@ -163,6 +164,7 @@ type Raft struct {
 	// (Used in 3A leader transfer)
 	leadTransferee uint64
 
+	pendingSnapShot map[uint64]bool
 	// Only one conf change may be pending (in the log, but not yet
 	// applied) at a time. This is enforced via PendingConfIndex, which
 	// is set to a value >= the log index of the latest pending
@@ -172,6 +174,14 @@ type Raft struct {
 	// (Used in 3A conf change)
 	PendingConfIndex          uint64
 	randomizedElectionTimeout int
+}
+
+func ShowPrs(prs map[uint64]*Progress) string {
+	msg := ""
+	for id, p := range prs {
+		msg = fmt.Sprintf("%s id %v progress %v %v", msg, id, p.Match, p.Next)
+	}
+	return msg
 }
 
 func random(start int, end int) int {
@@ -207,7 +217,7 @@ func newRaft(c *Config) *Raft {
 	raft.State = StateFollower
 	raft.votes = map[uint64]bool{}
 	raft.id = c.ID
-
+	raft.pendingSnapShot = make(map[uint64]bool)
 	raft.Prs = make(map[uint64]*Progress)
 	// 从 confstate中恢复
 	if len(c.peers) == 0 && len(conf.Nodes) != 0 {
@@ -256,6 +266,16 @@ func (r *Raft) tick() {
 			} else {
 				r.heartbeatElapsed++
 			}
+			r.checkPendingSnapshot()
+		}
+	}
+}
+
+func (r *Raft) checkPendingSnapshot() {
+	for id, needSendSnap := range r.pendingSnapShot {
+		if needSendSnap {
+			log.Infof("raft_id: %v,tag: snapshot,log: find a pendingSnapshot %v\n", r.id, id)
+			r.sendAppend(id)
 		}
 	}
 }
@@ -263,7 +283,7 @@ func (r *Raft) tick() {
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 // step 方法中主要处理异常情况 和调用正常的处理逻辑
-// 命名规范 xxxHandlexxx 表明只有处于这个state才能处理这个msg 函数内不会对自己的stateo做校验 外部做校验
+// 命名规范 xxxHandlexxx 表明只有处于这个state才能处理这个msg 函数内不会对自己的state 做校验 外部做校验
 // 		   handleXXX    理论上说所有的state都可以处理这个msg 函数内自己处理
 func (r *Raft) Step(m pb.Message) error {
 	log.Debugf("raft_id: %v, step %v state %v from %v term %v im %v term %v", r.id, m.MsgType, r.State, m.From, m.Term, r.id, r.Term)
@@ -288,9 +308,8 @@ func (r *Raft) Step(m pb.Message) error {
 	// 通过这次term的再次选举来恢复状态
 	// 假设有一个网络故障的candidiate
 	// 虽然大家都变成了follower
-	// 但因为有 preTerm 和 preLog 的校验 大家拒绝非法的 candidate 当 leader所以没什么问题
-	// 要注意的是这里是> 不是>= 因为AppendEntriesResponse和 RequestVoteResponse中的就是>=发送者的Term的
-	// 如果在=的情况下becomeFollower会导致server和candidate的操作无法继续
+	// 但因为有 preTerm 和 preLog 的校验 大家拒绝非法的 candidate当leader所以所人term会飙升 但不会破坏安全性 所以没什么问题
+	// 要注意的是这里是> 不是>= 因为AppendEntriesResponse和 RequestVoteResponse中的就是 =发送者的Term的
 	// TODO is that a goold choice??
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
@@ -301,6 +320,7 @@ func (r *Raft) Step(m pb.Message) error {
 		msg := new(RequestVoteRequest)
 		msg.FromPb(m)
 
+		// TODO why this function
 		isValidCandidate := func(followerLastIndex uint64, followerLastIndexTerm uint64, msg *RequestVoteRequest) bool {
 			isValid := msg.LastLogTerm > followerLastIndexTerm || (msg.LastLogTerm == followerLastIndexTerm && msg.LastLogIndex >= followerLastIndex)
 			log.Debugf("raft_id: %v,  ,tag: election, log check candidate valid %v can-log %v can-term %v cur-log %v cur-term %v", r.id, isValid, msg.LastLogIndex, msg.LastLogTerm, followerLastIndex, followerLastIndexTerm)
@@ -323,7 +343,7 @@ func (r *Raft) Step(m pb.Message) error {
 		return r.followerHandleRequestVote(msg)
 	}
 
-	// 在赢得大多数选票时 candidate就成了leader 此时还会收到voteresponse 这时 voteresponse 就没有意义了 忽视即可
+	// 在赢得大多数选票时 candidate就成了leader 此时还会收到voteresponse 这时的voteresponse 就没有意义了 忽视即可
 	if m.MsgType == pb.MessageType_MsgRequestVoteResponse && r.Term == m.Term && r.State == StateCandidate {
 		msg := new(RequestVoteResponse)
 		msg.FromPb(m)
@@ -403,29 +423,37 @@ func (r *Raft) sendAppendToAll() {
 // TODO return true if a message was sent ???
 // 当entries被compact且snapshoot没有生成时 直接return false
 func (r *Raft) sendAppend(to uint64) bool {
-	if r.RaftLog.IsEmpty() {
-		return false
-	}
+	//TODO check this logic
+	// if r.RaftLog.IsEmpty() {
+	// 	log.Infof("raft_id: %v,tag: leader-view ,log: raftlog is empty \n", r.id)
+	// 	return false
+	// }
 
 	next := r.Prs[to].Next
 	lastIndex := r.GetLastIndex()
 	if next > lastIndex {
-		log.Debugf("empty append??? maybe to update commit")
+		log.Debugf("raft_id: %v,tag: leader-view ,log: empty append??? maybe to update commit", r.id)
 	}
 	// could not find entry
 	// TODO some werid
 	// RaftLog里面什么都没有 什么都不用发
 	if next-1 < r.RaftLog.initIndex {
-		log.Warnf("is this normal????")
+		log.Warnf("raft_id: %v,tag: leader-view ,log: initIndex > next??")
 		return false
 	}
-	log.Infof("raft_id: %v entries %v %v sendAppend to %v\n", r.id, next, lastIndex+1,to)
+	log.Infof("raft_id: %v,tag: leader-view ,log: entries %v %v sendAppend to %v\n", r.id, next, lastIndex+1, to)
 	entries, err := r.RaftLog.PtrEntries(next, lastIndex+1)
 	if err == ErrCompacted {
+		log.Infof("raft_id: %+v,tag: snapshot leader-view ,log: find compact entries send snapshot to %v\n", r.id, to)
 		snapshot, err := r.RaftLog.Snapshot()
 		if err == ErrSnapshotTemporarilyUnavailable {
+			r.pendingSnapShot[to] = true
+
+			log.Infof("raft_id: %+v,tag: leader-view ,log: snapshot unabiable %v\n", r.id, to)
 			return false
 		}
+		log.Infof("raft_id: %+v,tag: snapshot leader-view ,log: snapshot ok send it\n", r.id)
+		r.pendingSnapShot[to] = false
 		r.sendSnapshot(to, snapshot)
 		return true
 	}
@@ -500,7 +528,6 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 
 func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 	if m.Reject {
-		log.Debugf("raft_id: %v, tag:GenericTest log: handleAppendResponse append reject follower is %v follower lastindex is %v", r.id, m.From, m.Index)
 		// TODO better
 		if r.Prs[m.From].Next > m.Index && m.Index != 0 {
 			r.Prs[m.From].Next = m.Index
@@ -510,6 +537,8 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 				r.Prs[m.From].Next--
 			}
 		}
+		log.Debugf("raft_id: %v, tag:GenericTest,leader-view log: handleAppendResponse append reject follower is %v follower lastindex is %v next %v", r.id, m.From, m.Index, r.Prs[m.From].Next)
+
 		r.sendAppend(m.From)
 	} else {
 		logTerm, err := r.RaftLog.Term(m.Index)
@@ -523,7 +552,7 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 			return nil
 		}
 
-		log.Debugf("handleAppendResponse append accept per id %v index %v", m.From, m.Index)
+		log.Debugf("raft_id: %v tag: leader-view, log: handleAppendResponse append accept per id %v index %v", r.id, m.From, m.Index)
 		// 正常情况
 		// 更新对应follower的progress
 		// Match代表follower和leader的最长公共前缀序列
@@ -552,10 +581,10 @@ func (r *Raft) tryCommit() {
 }
 
 func (r *Raft) leaderHandleMsgPropose(m pb.Message) {
-	log.Debugf("leader handle msg propose entries len %v", len(m.Entries))
 	// 1. 将entry存到自己的log中
 	// client request entries only contains data
 	r.RaftLog.appendClientEntries(m.Entries, r.Term)
+	log.Debugf("raft_id: %v,tag: leader-view, log: leader handle msg propose entries len %v lastindex %v", r.id, len(m.Entries), r.GetLastIndex())
 
 	log.Debugf("raft_id: %v, after leader handle propose len %v lastIndex %v commit %v", r.id, len(m.Entries), r.GetLastIndex(), r.getCommitedID())
 	// 2. 更新自己的状态
@@ -611,7 +640,7 @@ func (r *Raft) candidateHandleRequestVoteResponse(m *RequestVoteResponse) {
 
 		// voteMeCount, rejectMeCount
 		halfCount := uint64(len(r.Prs) / 2)
-		log.Debugf("raft_id :%v tag: election log: am i win vote me %v rejectMe %v len %v ", r.id, voteMeCount, rejectMeCount, len(r.Prs))
+		log.Debugf("raft_id: %v tag: election log: am i win vote me %v rejectMe %v len %v ", r.id, voteMeCount, rejectMeCount, len(r.Prs))
 		if voteMeCount > halfCount {
 			return VoteWin
 		} else if rejectMeCount > halfCount {
@@ -656,7 +685,7 @@ func (r *Raft) checkCommit() (bool, uint64) {
 	}
 	sort.Slice(matchedIndex, func(i, j int) bool { return matchedIndex[i] < matchedIndex[j] })
 	halfCount := uint64((len(r.Prs)+1)/2) - 1
-	log.Debugf("raft_id: %v, check commit matchedIndex %v prs %+v half count %v total count %v", r.id, matchedIndex, r.Prs, halfCount, len(r.Prs))
+	log.Debugf("raft_id: %v, check commit matchedIndex %v prs %+v half count %v total count %v", r.id, matchedIndex, ShowPrs(r.Prs), halfCount, len(r.Prs))
 
 	if matchedIndex[halfCount] > r.getCommitedID() {
 		return true, matchedIndex[halfCount]
@@ -822,17 +851,13 @@ func (r *Raft) sendHeartbeatResponse(to uint64) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	// r.RaftLog.appendClientEntries(m.Entries, r.Term)
-	// r.sendAppendToAll()
+	log.Infof("raft_id: %v,tag: snapshot,log: handlesnapshot snapindex %v lastindex %v\n", r.id, m.Snapshot.Metadata.Index, r.RaftLog.LastIndex())
 	if m.Snapshot.Metadata.Index > r.RaftLog.LastIndex() {
 		r.Lead = m.From
 		r.updateNodes(m.Snapshot.Metadata.ConfState.Nodes)
 		r.RaftLog.handleSnapshot(m.Snapshot)
-	} else {
-		//TODO 在else的情况中 有没有可能是follower的虚假entryies导致
+		r.acceptAppenEntries(m.From, m.Snapshot.Metadata.Index)
 	}
-	//TODO  发送response
-
 }
 
 func (r *Raft) updateNodes(nodes []uint64) {

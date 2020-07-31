@@ -217,7 +217,7 @@ func (rn *RawNode) Ready() Ready {
 	curHardState := rn.Raft.hardState()
 
 	unapplyEntries := rn.Raft.RaftLog.unAppliedEntis()
-	log.Debugf("raft_id :%v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries), ShowHardState(curHardState))
+	log.Debugf("raft_id: %v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries), ShowHardState(curHardState))
 	if len(unapplyEntries) != int(rn.Raft.RaftLog.committed-rn.Raft.RaftLog.applied) {
 		panic("xxx len ???")
 	}
@@ -228,6 +228,9 @@ func (rn *RawNode) Ready() Ready {
 
 	ready.UnApplyEntry = unapplyEntries
 	ready.UnStableEntry = unstableEntries
+	if rn.Raft.RaftLog.pendingSnapshot != nil {
+		ready.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+	}
 	ready.Messages = msgs
 	return ready
 }

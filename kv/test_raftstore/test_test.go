@@ -191,7 +191,7 @@ func TestSimpleCluster2B(t *testing.T) {
 	cluster.ClearFilters()
 	cluster.AddFilter(&PartitionFilter{
 		s1: []uint64{0, 1},
-		s2:[]uint64{2},
+		s2: []uint64{2},
 	})
 
 	for i := 10; i < 20; i++ {
@@ -222,7 +222,6 @@ func TestSimpleCluster2B(t *testing.T) {
 			t.Errorf("could not get puted value")
 		}
 	}
-
 
 	// should be ok after restart
 	log.Warnf("shutdown servers\n")
@@ -370,11 +369,11 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 				} else {
 					start := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", 0)
 					end := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)
-					log.Debugf("%d: client new scan %v-%v end %v", cli, start, end,j)
+					log.Debugf("%d: client new scan %v-%v end %v", cli, start, end, j)
 					values := cluster.Scan([]byte(start), []byte(end))
 					v := string(bytes.Join(values, []byte("")))
 					if v != last {
-						log.Fatalf("get wrong value, client %v\nwant:%v\ngot: %v j is :%v\n", cli, last,v,j)
+						log.Fatalf("get wrong value, client %v\nwant:%v\ngot: %v j is :%v\n", cli, last, v, j)
 						os.Exit(-1)
 					}
 				}
@@ -619,7 +618,7 @@ func TestOneSnapshot2C(t *testing.T) {
 			t.Fatalf("unexpected truncated state %v", state.TruncatedState)
 		}
 	}
-	log.Debugf("tag:snap add PartitionFilter")
+	log.Debugf("tag: OneSnapshot2C, log: add PartitionFilter")
 	// 使得1被隔离这样当leader同步时就会发送snapshot给他
 	cluster.AddFilter(
 		&PartitionFilter{
@@ -630,16 +629,19 @@ func TestOneSnapshot2C(t *testing.T) {
 
 	// write some data to trigger snapshot
 	for i := 100; i < 115; i++ {
-		log.Debugf("tag:snap put cf %v", i)
+		log.Debugf("tag:OneSnapshot2C put cf %v", i)
 		cluster.MustPutCF(cf, []byte(fmt.Sprintf("k%d", i)), []byte(fmt.Sprintf("v%d", i)))
 	}
 	cluster.MustDeleteCF(cf, []byte("k2"))
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(5000 * time.Millisecond)
 	// 此时1是被隔离的状态 无法从中获取k100
 	MustGetCfNone(cluster.engines[1], cf, []byte("k100"))
+
+	log.Infof("tag: OneSnapshot2C  ClearFilters\n", )
 	cluster.ClearFilters()
 
-	// Now snapshot must applied on
+	// Now snapshot must applied on 为什么.....
+	// 当leader收到get时 首先会去同步 这时就会发送snapshot给1了
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k100"), []byte("v100"))
 	MustGetCfNone(cluster.engines[1], cf, []byte("k2"))

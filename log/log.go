@@ -13,6 +13,8 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -74,6 +76,17 @@ func SetFlags(flags int) {
 
 func Info(v ...interface{}) {
 	_log.Info(v...)
+}
+
+func goID() int {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf("cannot get goroutine id: %v", err))
+	}
+	return id
 }
 
 func Infof(format string, v ...interface{}) {
@@ -170,7 +183,7 @@ func (l *Logger) logf(t LogType, format string, v ...interface{}) {
 	if l.level|LogLevel(t) != l.level {
 		return
 	}
-
+	format = fmt.Sprintf("gid: %v %s", goID(), format)
 	logStr, logColor := LogTypeToString(t)
 	var s string
 	if l.highlighting {

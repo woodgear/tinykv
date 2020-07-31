@@ -57,8 +57,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		msgs := ready.Messages
 		log.Debugf("raft_id: %v, log: HandleRaftReady send msgs %+v", d.Meta.GetId(), len(msgs))
 		// send 是个异步的方法
-		// TODO 有可能吗 ready的过程应该是单线程的 即使出现了下述的情况 也应该阻塞在hasReady中才对啊
-		// 一旦process 没有send的返回值快 那么就有可能出现递归的HasReady 所以我们需要在rawnode保证HasReady->Advance的单序
 		d.Send(d.ctx.trans, msgs)
 		d.ProcessReady(ready)
 
@@ -66,6 +64,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		d.RaftGroup.Advance(ready)
 	}
 }
+
 func (p *peerMsgHandler) ProcessReady(ready raft.Ready) {
 	log.Debugf("raft_id: %v, log: 2B=> GenericTest progress entry len %v", p.peer.Meta.GetId(), len(ready.GetUnApplyEntry()))
 	for _, e := range ready.GetUnApplyEntry() {
@@ -116,18 +115,18 @@ func (p *peerMsgHandler) ProcessRequest(cmdReq raft_cmdpb.RaftCmdRequest) (*raft
 	resp.Header = new(raft_cmdpb.RaftResponseHeader)
 	resp.Responses = []*raft_cmdpb.Response{}
 
-	// if cmdReq.AdminRequest != nil && p.IsLeader() {
-	// 	switch cmdReq.AdminRequest.CmdType {
-	// 	case raft_cmdpb.AdminCmdType_CompactLog:
-	// 		{
-	// 			compactCmd := cmdReq.AdminRequest.CompactLog
-	// 			p.peerStorage.applyState.TruncatedState.Index = compactCmd.CompactIndex
-	// 			p.peerStorage.applyState.TruncatedState.Term = compactCmd.CompactTerm
-	// 			p.ScheduleCompactLog(0, compactCmd.CompactIndex)
-	// 			log.Debugf("raft_id: %v, tag: snap log: get snap req %v %v %v", p.Meta.GetId(), cmdReq.Header.Peer.Id, compactCmd.CompactIndex, compactCmd.CompactTerm)
-	// 		}
-	// 	}
-	// }
+	if cmdReq.AdminRequest != nil {
+		switch cmdReq.AdminRequest.CmdType {
+		case raft_cmdpb.AdminCmdType_CompactLog:
+			{
+				compactCmd := cmdReq.AdminRequest.CompactLog
+				p.peerStorage.applyState.TruncatedState.Index = compactCmd.CompactIndex
+				p.peerStorage.applyState.TruncatedState.Term = compactCmd.CompactTerm
+				p.ScheduleCompactLog(0, compactCmd.CompactIndex)
+				log.Debugf("raft_id: %v, tag: gc log: schedulecompact %v compactindex %v compactterm %v", p.Meta.GetId(), cmdReq.Header.Peer.Id, compactCmd.CompactIndex, compactCmd.CompactTerm)
+			}
+		}
+	}
 
 	for _, req := range cmdReq.Requests {
 		switch req.CmdType {
@@ -342,6 +341,7 @@ func (d *peerMsgHandler) onRaftMsg(msg *rspb.RaftMessage) error {
 		return err
 	}
 	if key != nil {
+		log.Infof("raft_id:%v,tag:snapshot find snapshot\n", d.peer.Meta.GetId())
 		// If the snapshot file is not used again, then it's OK to
 		// delete them here. If the snapshot file will be reused when
 		// receiving, then it will fail to pass the check again, so
@@ -555,6 +555,7 @@ func (d *peerMsgHandler) findSiblingRegion() (result *metapb.Region) {
 }
 
 func (d *peerMsgHandler) onRaftGCLogTick() {
+
 	d.ticker.schedule(PeerTickRaftLogGC)
 	if !d.IsLeader() {
 		return
@@ -562,7 +563,6 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 
 	appliedIdx := d.peerStorage.AppliedIndex()
 	firstIdx, _ := d.peerStorage.FirstIndex()
-
 	var compactIdx uint64
 	if appliedIdx > firstIdx && appliedIdx-firstIdx >= d.ctx.cfg.RaftLogGcCountLimit {
 		compactIdx = appliedIdx
@@ -576,17 +576,18 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 		// In case compact_idx == first_idx before subtraction.
 		return
 	}
+	term, err := d.RaftGroup.Raft.RaftLog.Term(compactIdx)
 
-	// term, err := d.RaftGroup.Raft.RaftLog.Term(compactIdx)
-	// if err != nil {
-	// 	log.Fatalf("appliedIdx: %d, firstIdx: %d, compactIdx: %d", appliedIdx, firstIdx, compactIdx)
-	// 	panic(err)
-	// }
-	// log.Debugf("raft_id: %v, tag:snap onRaftGCLogTick %v %v %v %v %v", d.Meta.GetId(),compactIdx, appliedIdx, firstIdx, appliedIdx-firstIdx, d.ctx.cfg.RaftLogGcCountLimit)
-	// // Create a compact log request and notify directly.
-	// regionID := d.regionId
-	// request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)
-	// d.proposeRaftCommand(request, nil)
+	if err != nil {
+		log.Fatalf("appliedIdx: %d, firstIdx: %d, compactIdx: %d", appliedIdx, firstIdx, compactIdx)
+		panic(err)
+	}
+
+	log.Infof("raft_id: %+v,tag:gc,log: start gc index :%v term %v\n", d.Meta.GetId(), compactIdx, term)
+	// Create a compact log request and notify directly.
+	regionID := d.regionId
+	request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)
+	d.proposeRaftCommand(request, nil)
 }
 
 func (d *peerMsgHandler) onSplitRegionCheckTick() {
