@@ -196,8 +196,10 @@ func newRaft(c *Config) *Raft {
 	}
 
 	raft := new(Raft)
+	raft.id = c.ID
 	// 从之前的config中我们可以获取到的信息
 	hardState, conf, err := c.Storage.InitialState()
+	log.Infof("raft_id: %v,tag:init,log: raft init hardstate is %v \n", raft.id, hardState)
 	if err != nil {
 		panic(err)
 	}
@@ -209,6 +211,7 @@ func newRaft(c *Config) *Raft {
 	raft.randomizedElectionTimeout = random(raft.electionTimeout, 2*raft.electionTimeout)
 
 	raft.RaftLog = newLog(c.Storage)
+	raft.RaftLog.tag = fmt.Sprintf("%v", raft.id)
 	//TODO ????
 	raft.RaftLog.committed = hardState.Commit
 
@@ -216,7 +219,6 @@ func newRaft(c *Config) *Raft {
 
 	raft.State = StateFollower
 	raft.votes = map[uint64]bool{}
-	raft.id = c.ID
 	raft.pendingSnapShot = make(map[uint64]bool)
 	raft.Prs = make(map[uint64]*Progress)
 	// 从 confstate中恢复

@@ -57,6 +57,7 @@ type RaftLog struct {
 
 	initIndex uint64
 	initTerm  uint64
+	tag       string
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -68,13 +69,15 @@ func newLog(storage Storage) *RaftLog {
 
 	firstIndex, error := storage.FirstIndex()
 	if error != nil {
-		return nil
+		panic(error)
 	}
 
 	lastIndex, error := storage.LastIndex()
+
 	if error != nil {
-		return nil
+		panic(error)
 	}
+
 	initIndex := firstIndex - 1
 	initTerm, error := storage.Term(initIndex)
 	// TODO
@@ -91,7 +94,8 @@ func newLog(storage Storage) *RaftLog {
 	if lastIndex >= firstIndex {
 		entries, error := storage.Entries(firstIndex, lastIndex+1)
 		if error != nil {
-			return nil
+			log.Errorf("load entries fail %v %v\n", firstIndex, lastIndex)
+			panic(error)
 		}
 		l.entries = append(l.entries, entries...)
 	} else {
@@ -106,6 +110,10 @@ func newLog(storage Storage) *RaftLog {
 func (l *RaftLog) handleSnapshot(snapshot *pb.Snapshot) {
 	l.pendingSnapshot = snapshot
 
+}
+
+func (l *RaftLog) SetTag(tag string) {
+	l.tag = tag
 }
 
 // LastIndex return the last index of the log entries
@@ -146,7 +154,7 @@ func (l *RaftLog) isValidIndex(index uint64) error {
 func (l *RaftLog) GetEntry(index uint64) (*pb.Entry, error) {
 	err := l.isValidIndex(index)
 	if err != nil {
-		log.Infof("not valid\n", )
+		log.Infof("not valid\n")
 		return nil, err
 	}
 	entryPtr := l.getEntryFromRaftLogIfExist(index)
@@ -180,6 +188,7 @@ func (l *RaftLog) isInRaftLogEntriesRange(index uint64) bool {
 // 上层raft 算法模块查询Entries 一般是sendAppend时要获取数据
 // 应当会有报错 表示Entries已经被gc了
 func (l *RaftLog) Entries(low, high uint64) ([]pb.Entry, error) {
+	log.Infof("raft_id: %v, log: entries %v %v\n", l.tag, low, high)
 	if low > high {
 		panic(fmt.Errorf("Entries low>hight %v %v fail", low, high))
 	}
@@ -273,7 +282,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 	// all of commited entry include the last commit entry
 	if l.applied > l.committed {
-		panic("raftLog  unAppliedEntis apply > commit ??")
+		panic(fmt.Sprintf("raftLog  unAppliedEntis apply > commit %v %v ??", l.applied, l.committed))
 	}
 	ents, err := l.Entries(l.applied+1, l.committed+1)
 	if err != nil {
@@ -291,7 +300,7 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	if len(l.entries) != 0 {
 		log.Infof("term range %v %v\n", l.entries[0].Index, l.entries[len(l.entries)-1].Index)
 	}
-	
+
 	if l.isInRaftLogEntriesRange(i) {
 		entry, err := l.GetEntry(i)
 		if err != nil {

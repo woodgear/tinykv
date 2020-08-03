@@ -257,6 +257,12 @@ func (rn *RawNode) Advance(rd Ready) {
 		rn.Raft.RaftLog.applied = e.Index
 	}
 
+	if rd.Snapshot.Metadata != nil {
+		rn.Raft.RaftLog.applied = rd.Snapshot.Metadata.Index
+		rn.Raft.RaftLog.committed = rd.Snapshot.Metadata.Index
+		rn.Raft.RaftLog.stabled = rd.Snapshot.Metadata.Index
+	}
+
 	rn.Raft.msgs = []pb.Message{}
 	rn.Raft.RaftLog.clearEntries()
 }

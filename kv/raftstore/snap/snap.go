@@ -671,34 +671,27 @@ func (s *Snap) Save() error {
 }
 
 func (s *Snap) Apply(opts ApplyOptions) error {
-	log.Infof("tag: snap,log: \n")
 	err := s.validate()
 	if err != nil {
 		return err
 	}
-	log.Infof("tag: snap,log: \n")
 
 	externalFiles := make([]*os.File, 0, len(s.CFFiles))
-	log.Infof("tag: snap,log: \n")
 	for _, cfFile := range s.CFFiles {
-		log.Infof("tag: snap,log: \n")
 		if cfFile.Size == 0 {
 			// Skip empty cf file
 			continue
 		}
-		log.Infof("tag: snap,log: file is %v \n", cfFile.Path)
 		file, err := os.Open(cfFile.Path)
 		if err != nil {
 			log.Errorf("open ingest file %s failed: %s", cfFile.Path, err)
 			return err
 		}
-		log.Infof("tag: snap,log: \n")
 		externalFiles = append(externalFiles, file)
-		log.Infof("tag: snap,log: \n")
 	}
-	log.Infof("tag: snap,log: \n")
+	log.Infof("tag: snap,log: start IngestExternalFiles len is %v\n", len(externalFiles))
 	n, err := opts.DB.IngestExternalFiles(externalFiles)
-	log.Infof("tag: snap,log: \n")
+	log.Infof("tag: snap,log: end IngestExternalFiles\n")
 	for _, file := range externalFiles {
 		file.Close()
 	}
@@ -706,7 +699,7 @@ func (s *Snap) Apply(opts ApplyOptions) error {
 		log.Errorf("ingest sst failed (first %d files succeeded): %s", n, err)
 		return err
 	}
-	log.Infof("apply snapshot ingested %d tables", n)
+
 	return nil
 }
 

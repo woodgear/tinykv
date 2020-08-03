@@ -310,6 +310,7 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 
 // Append the given entries to the raft log and update ps.raftState also delete log entries that will
 // never be committed
+// 将raftlog 持久化下来
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
 	// Your Code Here (2B).
 	if len(entries) != 0 {
@@ -350,6 +351,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		Region:     ps.Region(),
 	}
 	applyNotify := make(chan bool)
+	// 更新 kv 中的数据
 	ps.regionSched <- &runner.RegionTaskApply{
 		RegionId: ps.region.Id,
 		SnapMeta: snapshot.Metadata,
@@ -359,11 +361,19 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	}
 	log.Infof("raft_id: %v,tag: snap,log: sending snapshot apply task\n", ps.getRaftId())
 	applySuccess := <-applyNotify
+
 	log.Infof("raft_id: %v,tag: snap,log: applysnapshot success\n", applySuccess)
 	if applySuccess {
 		ps.raftState.LastIndex = snapshot.Metadata.Index
 		ps.raftState.LastTerm = snapshot.Metadata.Term
 		ps.applyState.AppliedIndex = snapshot.Metadata.Index
+		ps.applyState.TruncatedState.Index = snapshot.Metadata.Index
+		ps.applyState.TruncatedState.Term = snapshot.Metadata.Term
+		log.Infof("raft_id: %v,tag: snap,log: update raftState and ApplyState commit %v  \n", snapshot.Metadata.Index)
+		//TODO ????
+		ps.raftState.HardState.Commit = snapshot.Metadata.Index
+		ps.raftState.HardState.Term = snapshot.Metadata.Term
+
 		ps.clearExtraData(ps.region)
 		ps.clearMeta(kvWB, raftWB)
 		return applyResult, nil
@@ -380,21 +390,22 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 
 	raftWb := new(engine_util.WriteBatch)
 	kvWb := new(engine_util.WriteBatch)
+
 	ps.Append(ready.GetUnStableEntry(), raftWb)
 
-	// TODO question 更新ps.raftState的操作被放到了两个函数中？
+	// TODO why do this two line
 	hardState := ready.HardState
 	ps.raftState.HardState = &hardState
+	// applysnapshot if we have
+	if ready.Snapshot.Metadata != nil {
+		ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
+	}
 
 	// 这里的检查有何意义？
 	if !raft.IsEmptyHardState(hardState) || len(ready.UnStableEntry) != 0 {
 		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
 	}
 	kvWb.SetMeta(meta.ApplyStateKey(ps.region.GetId()), ps.applyState)
-	// applysnapshot if we have
-	if ready.Snapshot.Metadata != nil {
-		ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
-	}
 
 	error := ps.Engines.WriteRaft(raftWb)
 	if error != nil {

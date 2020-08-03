@@ -637,7 +637,7 @@ func TestOneSnapshot2C(t *testing.T) {
 	// 此时1是被隔离的状态 无法从中获取k100
 	MustGetCfNone(cluster.engines[1], cf, []byte("k100"))
 
-	log.Infof("tag: OneSnapshot2C  ClearFilters\n", )
+	log.Infof("tag: OneSnapshot2C  ClearFilters\n")
 	cluster.ClearFilters()
 
 	// Now snapshot must applied on 为什么.....
@@ -645,9 +645,12 @@ func TestOneSnapshot2C(t *testing.T) {
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k100"), []byte("v100"))
 	MustGetCfNone(cluster.engines[1], cf, []byte("k2"))
-
+	log.Infof("tag:snap ,log StopServer\n")
 	cluster.StopServer(1)
+	log.Infof("tag:snap ,log StopServer ok\n")
+	log.Infof("tag:snap ,log StartServer\n")
 	cluster.StartServer(1)
+	log.Infof("tag:snap ,log StartServer ok\n")
 
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	for _, engine := range cluster.engines {

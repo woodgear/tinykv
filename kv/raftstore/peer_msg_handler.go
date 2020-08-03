@@ -49,9 +49,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 	if d.RaftGroup.HasReady() {
 		ready := d.RaftGroup.Ready()
-		log.Debugf("raft_id: %v, tag: GenericTest , log: HandleRaftReady Ready 2B=> %s ready %s", d.Meta.GetId(), d.RaftGroup.Raft.RaftLog.MetaString(), ready.String())
 		// save to storage
-		d.peerStorage.SaveReadyState(&ready)
+		_, err := d.peerStorage.SaveReadyState(&ready)
+		if err != nil {
+			panic(err)
+		}
 
 		// send msgs
 		msgs := ready.Messages
