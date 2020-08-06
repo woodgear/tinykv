@@ -671,7 +671,7 @@ func TestFollowerAppendEntriesStorage2AB(t *testing.T) {
 // Also, it writes the new entry into stable storage.
 // Reference: section 5.3
 //   默认storage中有 1,1   2,2 两个entries
-//  使用index term 作为preLogIndex term ents 作为 data
+//  使用index term 作为preLogIndex term,ents 作为 data
 //  检测log.entries 是否与wents 相同
 // unstableEntries 是否与 wunstable 相同
 func TestFollowerAppendEntries2AB(t *testing.T) {

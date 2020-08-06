@@ -91,6 +91,15 @@ func newLog(storage Storage) *RaftLog {
 	l.stabled = lastIndex
 	l.applied = initIndex // apply 最起码是snapindex
 
+	// TODO 我们必须将所有的storage中的 entries全部放在 entries中 否则TestFollowerAppendEntries2AB 会出问题
+	if lastIndex >= firstIndex {
+		entries, error := storage.Entries(firstIndex, lastIndex+1)
+		if error != nil {
+			log.Errorf("load entries fail %v %v %v %v\n", firstIndex, lastIndex, l.StableRangeString(), error)
+			panic(error)
+		}
+		l.entries = append(l.entries, entries...)
+	}
 	return l
 }
 
@@ -113,9 +122,14 @@ func (l *RaftLog) SetTag(tag string) {
 // TestRestoreSnapshot2C
 func (l *RaftLog) LastIndex() uint64 {
 	log.Infof("raft_id: %v,tag: ,log: %v %v %v \n", l.tag, l.UnstableRangeString(), l.StableRangeString(), l.PendingSnapshotStatus())
+	// TODO 3个max?
 	if l.pendingSnapshot != nil {
+		if len(l.entries) != 0 && l.entries[len(l.entries)-1].Index > l.pendingSnapshot.Metadata.Index {
+			return l.entries[len(l.entries)-1].Index
+		}
 		return l.pendingSnapshot.Metadata.Index
 	}
+
 	if len(l.entries) != 0 {
 		return l.entries[len(l.entries)-1].Index
 	}
@@ -273,7 +287,7 @@ func (l *RaftLog) StableRangeString() string {
 	if err != nil {
 		return fmt.Sprintf("Error:  StableRangeString could not get lastIndex, err is %v", err)
 	}
-	return fmt.Sprintf(`Unstable { len: %v,first: %v, last: %v }`, lastIndex-firstIndex, firstIndex, lastIndex)
+	return fmt.Sprintf(`Stable { len: %v,first: %v, last: %v }`, lastIndex-firstIndex, firstIndex, lastIndex)
 }
 
 func (l *RaftLog) PendingSnapshotStatus() string {
@@ -286,7 +300,15 @@ func (l *RaftLog) PendingSnapshotStatus() string {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// unstable entries 只可能是 l.entries中的
-	// 每次stabled总是在rawnode advance时被清空了 所以可以直接返回了l.entries
+	// 每次stabled总是在rawnode advance时被清空了
+	// 当appendEntries发现conflict时 可能对通过 更新uentries 和调整stabled来调整unstableEntries
+	if len(l.entries) == 0 {
+		return []pb.Entry{}
+	}
+	log.Infof("log: %v %v %v\n", l.stabled, l.UnstableRangeString(), l.StableRangeString())
+	if l.stabled != 0 {
+		return l.entries[l.stabled+1-l.entries[0].Index:]
+	}
 	return l.entries
 }
 

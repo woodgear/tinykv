@@ -258,7 +258,6 @@ func TestRawNodeRestart2AC(t *testing.T) {
 	}
 	st := pb.HardState{Term: 1, Commit: 1}
 	want := Ready{
-		HardState:     st,
 		UnStableEntry: []pb.Entry{},
 		// commit up to commit index in st
 		UnApplyEntry: entries[:st.Commit],
@@ -273,9 +272,7 @@ func TestRawNodeRestart2AC(t *testing.T) {
 	fmt.Printf("first ready\n")
 	rd := rawNode.Ready()
 	if !reflect.DeepEqual(rd, want) {
-		t.Logf("not deep equal")
 		t.Errorf("\ng = %s,\nw = %s", rd.String(), want.String())
-		t.Errorf("\ng = %#v,\nw = %#v", rd, want)
 		return
 	}
 	t.Logf("first advance")

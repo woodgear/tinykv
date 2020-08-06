@@ -399,7 +399,10 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 
 	// applysnapshot if we have
 	if ready.Snapshot.Metadata != nil {
-		ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
+		_, err := ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if !raft.IsEmptyHardState(ready.HardState) {
