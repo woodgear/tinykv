@@ -644,16 +644,17 @@ func TestOneSnapshot2C(t *testing.T) {
 	cluster.ClearFilters()
 
 	// Now snapshot must applied on
-	// 当leader收到get时 首先会去同步 这时就会发送snapshot给1了
+	// 当leader收到get时 首先会去同步 这时就会发送snapshot给1了 MustGetCfXX 实际上只是不停的直接从engines中查询数据 300次 每次停20ms 最长等6s
+	// 只应该发生一次snap的发送与接收
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k100"), []byte("v100"))
 	MustGetCfNone(cluster.engines[1], cf, []byte("k2"))
-	log.Infof("tag:snap ,log StopServer\n")
+	// log.Infof("tag:snap ,log StopServer\n")
 	cluster.StopServer(1)
-	log.Infof("tag:snap ,log StopServer ok\n")
-	log.Infof("tag:snap ,log StartServer\n")
+	// log.Infof("tag:snap ,log StopServer ok\n")
+	// log.Infof("tag:snap ,log StartServer\n")
 	cluster.StartServer(1)
-	log.Infof("tag:snap ,log StartServer ok\n")
+	// log.Infof("tag:snap ,log StartServer ok\n")
 
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	for _, engine := range cluster.engines {

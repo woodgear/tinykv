@@ -164,7 +164,10 @@ type Raft struct {
 	// (Used in 3A leader transfer)
 	leadTransferee uint64
 
-	pendingSnapShot map[uint64]bool
+	// 用来记录那些要发送snapshot 但是snapshot还没准备好的node的状态
+	// key 为nodeid val为尝试的次数
+	// 如果为0,则说明不需要发送snapshot 因为这里的模型是单线程的,所以不需要用原子操作
+	pendingSnapShot map[uint64]uint64
 	// Only one conf change may be pending (in the log, but not yet
 	// applied) at a time. This is enforced via PendingConfIndex, which
 	// is set to a value >= the log index of the latest pending
@@ -219,7 +222,7 @@ func newRaft(c *Config) *Raft {
 
 	raft.State = StateFollower
 	raft.votes = map[uint64]bool{}
-	raft.pendingSnapShot = make(map[uint64]bool)
+	raft.pendingSnapShot = make(map[uint64]uint64)
 	raft.Prs = make(map[uint64]*Progress)
 	// 从 confstate中恢复
 	if len(c.peers) == 0 && len(conf.Nodes) != 0 {
@@ -268,15 +271,17 @@ func (r *Raft) tick() {
 			} else {
 				r.heartbeatElapsed++
 			}
-			r.checkPendingSnapshot()
+			// r.checkPendingSnapshot()
 		}
 	}
 }
 
+// 检查是否需要发送snapshot过去 这里的逻辑是有些奇怪的 实际上相当于在异步的等待snapshot的产生
+// tikv在 leader HandleHeartbeatResponse中会检查log有没有同步 没有同步调用sendAppend 会再次发snapshot
 func (r *Raft) checkPendingSnapshot() {
-	for id, needSendSnap := range r.pendingSnapShot {
-		if needSendSnap {
-			log.Infof("raft_id: %v,tag: snap,log-replcation,log: find a pendingSnapshot %v try send again \n", r.id, id)
+	for id, snapTryCount := range r.pendingSnapShot {
+		if snapTryCount != 0 {
+			log.Infof("raft_id: %v,tag: snap,log: find a pendingSnapshot %v try send, tryCount %v \n", r.id, id, snapTryCount)
 			r.sendAppend(id)
 		}
 	}
@@ -352,6 +357,10 @@ func (r *Raft) Step(m pb.Message) error {
 		r.candidateHandleRequestVoteResponse(msg)
 	}
 
+	if m.MsgType == pb.MessageType_MsgHeartbeatResponse && r.Term == m.Term && r.State == StateLeader {
+		r.leaderHandleHeartBeatResponse(m)
+	}
+
 	if m.MsgType == pb.MessageType_MsgAppend {
 		// 当收到一个同级的msg append时可能是当选的leader发过来的 所以直接变为follower 并且设置leader
 		if m.Term == r.Term && r.Lead != m.From {
@@ -399,6 +408,12 @@ func (r *Raft) leaderHandleMsgBeat() {
 	r.tryCommit()
 	r.sendHeartbeatToAll()
 }
+func (r *Raft) leaderHandleHeartBeatResponse(m pb.Message) {
+	// 从心跳的返回值中我们能够获取到 对方node的 lastIndex lastTerm commit
+	if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
+		r.sendAppend(m.From)
+	}
+}
 
 func (r *Raft) handleMsgHup() {
 	r.becomeCandidate()
@@ -440,19 +455,18 @@ func (r *Raft) sendAppend(to uint64) bool {
 		log.Warnf("raft_id: %v,tag: leader-view ,log: initIndex > next??", r.id)
 		return false
 	}
-	log.Infof("raft_id: %v,tag: ,log: this\n", r.id)
 	entries, err := r.RaftLog.PtrEntries(next, lastIndex+1)
 	log.Infof("raft_id: %v,tag: ,log: this %v %v %v\n", r.id, err, next, lastIndex+1)
 	if err == ErrCompacted {
-		log.Infof("raft_id: %v,tag: log-replcation,log: send append to %v next %v lastIndex %v compact \n", r.id, to, next, lastIndex)
+		log.Infof("raft_id: %v,role: leader,tag: snap,log: step1 find err compact when get %v %v which want to send to %v log status %v\n", r.id, next, lastIndex, to, r.RaftLog.String())
 		snapshot, err := r.RaftLog.Snapshot()
 		if err == ErrSnapshotTemporarilyUnavailable {
-			r.pendingSnapShot[to] = true
-			log.Infof("raft_id: %+v,tag: leader-view,log-replcation,log: snapshot unabiable %v\n", r.id, to)
+			r.pendingSnapShot[to]++
+			log.Infof("raft_id: %+v,tag: snap,log: snapshot for %v unabiable tryCount is %v\n", r.id, to, r.pendingSnapShot[to])
 			return false
 		}
-		log.Infof("raft_id: %+v,tag: snap,log-replcation,leader-view ,log: snapshot ok send to %v next %v lastindex %v\n", r.id, to, next, lastIndex)
-		r.pendingSnapShot[to] = false
+		log.Infof("raft_id: %+v,tag: snap,log: snapshot ok tryCount %v send to %v next %v lastindex %v snap index %v term %v \n", r.id, r.pendingSnapShot[to], to, next, lastIndex, snapshot.Metadata.Index, snapshot.Metadata.Term)
+		r.pendingSnapShot[to] = 0
 		r.sendSnapshot(to, snapshot)
 		return true
 	}
@@ -852,14 +866,15 @@ func (r *Raft) sendHeartbeatResponse(to uint64) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	log.Infof("raft_id: %v,tag: snap,log-replcation ,log: handlesnapshot from %v snapindex %v lastindex %v\n", r.id, m.From, m.Snapshot.Metadata.Index, r.RaftLog.LastIndex())
-	if m.Snapshot.Metadata.Index > r.RaftLog.LastIndex() {
+	if m.Snapshot.Metadata.Index > r.RaftLog.committed {
 		r.Lead = m.From
-
 		r.updateNodes(m.Snapshot.Metadata.ConfState.Nodes)
 		r.RaftLog.savePendingSnapshot(m.Snapshot)
 		log.Infof("raft_id: %v,tag: log-replcation,log: handlesnapshot accept snapshot from %v index %v \n", r.id, m.From, m.Snapshot.Metadata.Index)
-		r.sendAcceptAppendEntriesResponse(m.From, m.Snapshot.Metadata.Index)
+		r.sendAcceptAppendEntriesResponse(m.From, r.RaftLog.LastIndex())
+	} else {
+		log.Infof("raft_id: %v,tag: weird,log: snapshotindex < commit ignore\n", r.id)
+		r.sendAcceptAppendEntriesResponse(m.From, r.RaftLog.committed)
 	}
 }
 

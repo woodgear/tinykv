@@ -295,6 +295,7 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 	if err != nil {
 		return err
 	}
+	// log.Infof("raft_id: %v,tag: snap,log: delete raft entry %v %v\n", regionID, firstIndex, lastIndex)
 	for i := firstIndex; i <= lastIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(regionID, i))
 	}
@@ -336,25 +337,28 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 
 // Apply the peer with given snapshot
 func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_util.WriteBatch, raftWB *engine_util.WriteBatch) (*ApplySnapResult, error) {
-	log.Infof("raft_id: %v ,tag:snap, log: begin to apply snapshot ", ps.Tag)
+	// log.Infof("raft_id: %v ,tag:snap, log: begin to apply snapshot ", ps.Tag)
 	snapData := new(rspb.RaftSnapshotData)
 	if err := snapData.Unmarshal(snapshot.Data); err != nil {
 		return nil, err
 	}
-	log.Infof("raft_id: %v,tag: snap,log: applysnapshot meta %+v metaData meta %+v lastindex  %v snapindex %v\n", ps.getRaftId(), snapData.Meta, snapshot.Metadata, ps.raftState.LastIndex, snapshot.Metadata.Index)
+
 	// Hint: things need to do here including: update peer storage state like raftState and applyState, etc,
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
+	// log.Infof("raft_id: %v,tag: snap,log: applysnapshot snap data len %v lastindex  %v snapindex %v snap region %v %v\n", ps.getRaftId(), len(snapshot.Data), ps.raftState.LastIndex, snapshot.Metadata.Index, snapData.Region.StartKey, snapData.Region.EndKey)
 	applyResult := &ApplySnapResult{
 		PrevRegion: ps.Region(),
-		Region:     ps.Region(),
+		Region:     snapData.Region,
 	}
 
-	//TODO ???
-	if ps.raftState.LastIndex >= snapshot.Metadata.Index {
-		return applyResult, nil
-	}
+	// TODO ???
+	// if ps.raftState.LastIndex >= snapshot.Metadata.Index {
+	// 	log.Warnf("raft_id: %v,tag:snap ,log:lastIndex>= snap index\n")
+	// 	return applyResult, nil
+	// }
+
 	applyNotify := make(chan bool)
 	// 更新 kv 中的数据
 	ps.regionSched <- &runner.RegionTaskApply{
@@ -364,21 +368,21 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		StartKey: ps.region.StartKey,
 		EndKey:   ps.region.EndKey,
 	}
-	log.Infof("raft_id: %v,tag: snap,log: sending snapshot apply task\n", ps.getRaftId())
+	// log.Infof("raft_id: %v,tag: snap,log: sending snapshot apply task\n", ps.getRaftId())
 	applySuccess := <-applyNotify
 
-	log.Infof("raft_id: %v,tag: snap,log: applysnapshot success\n", ps.getRaftId())
+	// log.Infof("raft_id: %v,tag: snap,log: applysnapshot success index %v term %v \n", ps.getRaftId(), snapshot.Metadata.Index, snapshot.Metadata.Term)
 	if applySuccess {
 		ps.raftState.LastIndex = snapshot.Metadata.Index
 		ps.raftState.LastTerm = snapshot.Metadata.Term
 		ps.applyState.AppliedIndex = snapshot.Metadata.Index
 		ps.applyState.TruncatedState.Index = snapshot.Metadata.Index
 		ps.applyState.TruncatedState.Term = snapshot.Metadata.Term
-		log.Infof("raft_id: %v,tag: snap,log: apply snap ok update raftState and ApplyState commit %v  \n", ps.getRaftId(), snapshot.Metadata.Index)
+		// log.Infof("raft_id: %v,tag: snap,log: apply snap ok update raftState and ApplyState commit %v  \n", ps.getRaftId(), snapshot.Metadata.Index)
 		ps.raftState.HardState.Commit = snapshot.Metadata.Index
 		ps.raftState.HardState.Term = snapshot.Metadata.Term
 
-		ps.clearExtraData(ps.region)
+		ps.clearExtraData(snapData.Region)
 		ps.clearMeta(kvWB, raftWB)
 		return applyResult, nil
 	} else {

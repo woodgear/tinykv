@@ -546,7 +546,7 @@ func (s *Snap) Build(dbSnap *badger.Txn, region *metapb.Region, snapData *rspb.R
 	if err != nil {
 		return err
 	}
-	log.Infof("tag: snap log: region %d scan snapshot %s, key count %d, size %d", region.Id, s.Path(), builder.kvCount, builder.size)
+	// log.Infof("tag: snap log: region %d scan snapshot %s, key count %d, size %d", region.Id, s.Path(), builder.kvCount, builder.size)
 	err = s.saveCFFiles()
 	if err != nil {
 		return err
@@ -689,9 +689,9 @@ func (s *Snap) Apply(opts ApplyOptions) error {
 		}
 		externalFiles = append(externalFiles, file)
 	}
-	log.Infof("tag: snap,log: start IngestExternalFiles len is %v\n", len(externalFiles))
+	// log.Infof("tag: snap,log: start IngestExternalFiles len is %v\n", len(externalFiles))
 	n, err := opts.DB.IngestExternalFiles(externalFiles)
-	log.Infof("tag: snap,log: end IngestExternalFiles\n")
+	// log.Infof("tag: snap,log: end IngestExternalFiles\n")
 	for _, file := range externalFiles {
 		file.Close()
 	}

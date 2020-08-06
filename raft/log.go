@@ -93,6 +93,7 @@ func newLog(storage Storage) *RaftLog {
 
 	// TODO 我们必须将所有的storage中的 entries全部放在 entries中 否则TestFollowerAppendEntries2AB 会出问题
 	if lastIndex >= firstIndex {
+		// log.Infof("tag: snap,log: load entries %v %v\n", firstIndex, lastIndex+1)
 		entries, error := storage.Entries(firstIndex, lastIndex+1)
 		if error != nil {
 			log.Errorf("load entries fail %v %v %v %v\n", firstIndex, lastIndex, l.StableRangeString(), error)
@@ -242,18 +243,21 @@ func (l *RaftLog) commit(index uint64) {
 // grow unlimitedly in memory
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
+	// TODO
 }
 
 func (l *RaftLog) String() string {
-	status := fmt.Sprintf(`Log { initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v,entry_len: %v,entries: %v}`,
+	status := fmt.Sprintf(`Log { tag: %v, initIndex: %v,initTerm: %v,commit: %v, stable: %v,apply: %v, lastindex: %v ,%v, %v, %v}`,
+		l.tag,
 		l.initIndex,
 		l.initTerm,
 		l.committed,
 		l.stabled,
 		l.applied,
 		l.LastIndex(),
-		len(l.entries),
-		ShowEntries(l.entries),
+		l.UnstableRangeString(),
+		l.StableRangeString(),
+		l.PendingSnapshotStatus(),
 	)
 	return status
 }
