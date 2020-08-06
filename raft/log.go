@@ -49,6 +49,7 @@ type RaftLog struct {
 	stabled uint64
 
 	// all entries that have not yet compact.
+	// entries[i].index = entries[0].index + i
 	entries []pb.Entry
 
 	// the incoming unstable snapshot, if any.
@@ -89,27 +90,13 @@ func newLog(storage Storage) *RaftLog {
 	l.initTerm = initTerm
 	l.stabled = lastIndex
 	l.applied = initIndex // apply 最起码是snapindex
-	// if lastIndex < firstIndex 这表示storage中没有任何 compact->stable之间的entry
-	// 说明这是新起的Raft Node
-	if lastIndex >= firstIndex {
-		entries, error := storage.Entries(firstIndex, lastIndex+1)
-		if error != nil {
-			log.Errorf("load entries fail %v %v\n", firstIndex, lastIndex)
-			panic(error)
-		}
-		l.entries = append(l.entries, entries...)
-	} else {
-	}
 
 	return l
 }
 
-// snapshot 按照我的理解是在rawnode 的ready中真正被存到storage中的
-// 如果在此时根据index term 更改了的话 问题是 如果有一个请求想要获取那些还在snap中的数据
-// 就会报错
-func (l *RaftLog) handleSnapshot(snapshot *pb.Snapshot) {
+// rawnode发现有pendingSnapshot会Ready 最终在peer_msg_handle中将其Apply
+func (l *RaftLog) savePendingSnapshot(snapshot *pb.Snapshot) {
 	l.pendingSnapshot = snapshot
-
 }
 
 func (l *RaftLog) SetTag(tag string) {
@@ -117,36 +104,44 @@ func (l *RaftLog) SetTag(tag string) {
 }
 
 // LastIndex return the last index of the log entries
+// 如果有snapshot的话 lastindex是snapshot的index
+// Q: 为什么
+// A:
+// 1. snapshot的index一定比当前的lastIndex大
+// 2. 假设leader在发送snapshot后又发送了snapshot之后的entries 两者在follower中正好一同处理(rawnode没有及时Ready) 如果lastIndex不是snapshot的index 那么就后面的entries的preLog和preTerm就无法匹配
+// 后面的Term也是相同的原因
+// TestRestoreSnapshot2C
 func (l *RaftLog) LastIndex() uint64 {
-	//  如果有 pendingSnapshot  那么 pendingSnapshot中的index必然是最大的
-
-	// if l.pendingSnapshot != nil {
-	// 	return l.pendingSnapshot.Metadata.Index
-	// }
-
-	if len(l.entries) == 0 {
-		storageLastIndex, err := l.storage.LastIndex()
-		// TODO fix panic
-		if err != nil {
-			panic(err)
-		}
-		return storageLastIndex
+	log.Infof("raft_id: %v,tag: ,log: %v %v %v \n", l.tag, l.UnstableRangeString(), l.StableRangeString(), l.PendingSnapshotStatus())
+	if l.pendingSnapshot != nil {
+		return l.pendingSnapshot.Metadata.Index
 	}
-	return l.entries[len(l.entries)-1].Index
-}
-
-func (l *RaftLog) GetTerm(index uint64) uint64 {
-	term, err := l.Term(index)
+	if len(l.entries) != 0 {
+		return l.entries[len(l.entries)-1].Index
+	}
+	storageLastIndex, err := l.storage.LastIndex()
 	if err != nil {
+		log.Infof("raft_id: %v,log: snapshot and unstable entries not exits, get storage lastindex fail \n", err)
 		panic(err)
 	}
-	return term
+	return storageLastIndex
 }
 
 func (l *RaftLog) isValidIndex(index uint64) error {
 	lastIndex := l.LastIndex()
 	if index > lastIndex {
 		return fmt.Errorf("invalid index index %v lastIndex %v", index, lastIndex)
+	}
+	if len(l.entries) != 0 && index >= l.entries[0].Index {
+		return nil
+	}
+	storageFirstIndex, err := l.storage.FirstIndex()
+	if err != nil {
+		return err
+	}
+	if index < storageFirstIndex {
+		log.Warnf("raft_id: %v, log:invalid index index %v lastIndex  %v storageFirstIndex %v", l.tag, index, lastIndex, storageFirstIndex)
+		return ErrCompacted
 	}
 	return nil
 }
@@ -188,9 +183,9 @@ func (l *RaftLog) isInRaftLogEntriesRange(index uint64) bool {
 // 上层raft 算法模块查询Entries 一般是sendAppend时要获取数据
 // 应当会有报错 表示Entries已经被gc了
 func (l *RaftLog) Entries(low, high uint64) ([]pb.Entry, error) {
-	log.Infof("raft_id: %v, log: entries %v %v\n", l.tag, low, high)
+	log.Infof("raft_id: %v, log: entries %v %v %v %v %v\n", l.tag, low, high, l.UnstableRangeString(), l.StableRangeString(), l.PendingSnapshotStatus())
 	if low > high {
-		panic(fmt.Errorf("Entries low>hight %v %v fail", low, high))
+		return nil, fmt.Errorf("Entries low>hight %v %v fail", low, high)
 	}
 	ents := []pb.Entry{}
 	for i := low; i < high; i++ {
@@ -262,14 +257,39 @@ func (l *RaftLog) MetaString() string {
 	return status
 }
 
+func (l *RaftLog) UnstableRangeString() string {
+	if len(l.entries) == 0 {
+		return fmt.Sprintf(`Unstable { len: %v,first: %v, last: %v }`, len(l.entries), "-", "-")
+	}
+	return fmt.Sprintf(`Unstable { len: %v,first: %v, last: %v }`, len(l.entries), l.entries[0].Index, l.entries[len(l.entries)-1].Index)
+}
+
+func (l *RaftLog) StableRangeString() string {
+	firstIndex, err := l.storage.FirstIndex()
+	if err != nil {
+		return fmt.Sprintf("Error:  StableRangeString could not get FirstIndex, err is %v", err)
+	}
+	lastIndex, err := l.storage.LastIndex()
+	if err != nil {
+		return fmt.Sprintf("Error:  StableRangeString could not get lastIndex, err is %v", err)
+	}
+	return fmt.Sprintf(`Unstable { len: %v,first: %v, last: %v }`, lastIndex-firstIndex, firstIndex, lastIndex)
+}
+
+func (l *RaftLog) PendingSnapshotStatus() string {
+	if l.pendingSnapshot == nil {
+		return fmt.Sprintf("PendingSnapshot not exist")
+	}
+	return fmt.Sprintf("PendingSnapshot {lastIndex: %v,lastTerm: %v}", l.pendingSnapshot.Metadata.Index, l.pendingSnapshot.Metadata.Term)
+}
+
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	ents, err := l.Entries(l.stabled+1, l.LastIndex()+1)
-	if err != nil {
-		panic(err)
-	}
-	return ents
+	// unstable entries 只可能是 l.entries中的
+	// 每次stabled总是在rawnode advance时被清空了 所以可以直接返回了l.entries
+	return l.entries
 }
+
 func (l *RaftLog) Snapshot() (pb.Snapshot, error) {
 	return l.storage.Snapshot()
 }
@@ -293,9 +313,9 @@ func (l *RaftLog) unAppliedEntis() (ents []pb.Entry) {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	// if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
-	// 	return l.pendingSnapshot.Metadata.Term, nil
-	// }
+	if l.pendingSnapshot != nil && l.pendingSnapshot.Metadata.Index == i {
+		return l.pendingSnapshot.Metadata.Term, nil
+	}
 
 	if len(l.entries) != 0 {
 		log.Infof("term range %v %v\n", l.entries[0].Index, l.entries[len(l.entries)-1].Index)
@@ -352,8 +372,12 @@ func findConflict(serverLog *[]pb.Entry, followerLog *[]pb.Entry) (bool, uint64)
 func (l *RaftLog) tryAppendEntries(preLogIndex uint64, preLogTerm uint64, entries []*pb.Entry) (uint64, error) {
 	// 当我们收到server发来的Entries时 有几种情况需要分类讨论
 	// 首先保证 server的Entries是合法的
-
-	if preLogIndex > l.LastIndex() || l.GetTerm(preLogIndex) != preLogTerm {
+	// TODO why this??? 有些情况下 preLogIndex 被gc掉了????
+	term, err := l.Term(preLogIndex)
+	if err != nil {
+		return 0, err
+	}
+	if preLogIndex > l.LastIndex() || term != preLogTerm {
 		return 0, fmt.Errorf("could not find this index and term")
 	}
 

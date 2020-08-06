@@ -135,6 +135,7 @@ func Errorf(format string, v ...interface{}) {
 
 func Fatal(v ...interface{}) {
 	_log.Fatal(v...)
+	os.Exit(-1)
 }
 
 func Fatalf(format string, v ...interface{}) {

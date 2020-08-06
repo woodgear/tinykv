@@ -300,7 +300,7 @@ func TestRawNodeRestartFromSnapshot2C(t *testing.T) {
 		{Term: 1, Index: 3, Data: []byte("foo")},
 	}
 	st := pb.HardState{Term: 1, Commit: 3}
-
+	// hardstate 没有变化时为空
 	want := Ready{
 		UnStableEntry: []pb.Entry{},
 		// commit up to commit index in st
@@ -308,9 +308,9 @@ func TestRawNodeRestartFromSnapshot2C(t *testing.T) {
 	}
 
 	s := NewMemoryStorage()
-	s.SetHardState(st)
 	s.ApplySnapshot(snap)
 	s.Append(entries)
+	s.SetHardState(st)
 	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s))
 	if err != nil {
 		t.Fatal(err)

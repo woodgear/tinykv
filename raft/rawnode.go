@@ -53,7 +53,6 @@ type Ready struct {
 
 	// UnStableEntry specifies entries to be saved to stable storage BEFORE
 	// Messages are sent.
-	// TODO rename to UnStableEntry
 	UnStableEntry []pb.Entry
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
@@ -62,7 +61,6 @@ type Ready struct {
 	// UnApplyEntry specifies entries to be committed to a
 	// store/state-machine. These have previously been committed to stable
 	// store.
-	// TODO rename to UnApplyEntry
 	UnApplyEntry []pb.Entry
 
 	// Messages specifies outbound messages to be sent AFTER Entries are
@@ -198,33 +196,34 @@ func (rn *RawNode) HasReady() bool {
 	// 有未 stable 的 entries
 	// 有未 apply 的 entries
 	// hardState change
-	// log.Debugf("%v %v %v",ShowHardState(rn.Raft.hardState()),ShowHardState(rn.preHardState),!hardStateEq(rn.Raft.hardState(), rn.preHardState))
+	log.Infof("%v %v %v", ShowHardState(rn.Raft.hardState()), ShowHardState(rn.preHardState), !hardStateEq(rn.Raft.hardState(), rn.preHardState))
 	hardStateChange := !hardStateEq(rn.Raft.hardState(), rn.preHardState)
 	unSendMsgs := len(rn.Raft.msgs) != 0
 	unStableEntries := len(rn.Raft.RaftLog.entries) != 0
 	unApplyEntries := rn.Raft.RaftLog.applied != rn.Raft.RaftLog.committed
-	// log.Debugf("hardStateChange %v unSendMsgs %v unStableEntries %v unApplyEntries %v", hardStateChange, unSendMsgs, unStableEntries, unApplyEntries)
+	log.Infof("hardStateChange %v unSendMsgs %v unStableEntries %v unApplyEntries %v", hardStateChange, unSendMsgs, unStableEntries, unApplyEntries)
 	return hardStateChange || unSendMsgs || unStableEntries || unApplyEntries
 }
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
-
 	ready := Ready{}
 	ready.UnApplyEntry = []pb.Entry{}
 	ready.UnStableEntry = []pb.Entry{}
 
 	curHardState := rn.Raft.hardState()
-
 	unapplyEntries := rn.Raft.RaftLog.unAppliedEntis()
-	log.Debugf("raft_id: %v  ===>  ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries), ShowHardState(curHardState))
+	log.Debugf("raft_id: %v,tag:rawnode ,log:ready unapply len %v commit  %v  apply  %v ents %v state %v", rn.Raft.id, len(unapplyEntries), rn.Raft.RaftLog.committed, rn.Raft.RaftLog.applied, ShowEntries(unapplyEntries), ShowHardState(curHardState))
 	if len(unapplyEntries) != int(rn.Raft.RaftLog.committed-rn.Raft.RaftLog.applied) {
 		panic("xxx len ???")
 	}
 
 	unstableEntries := rn.Raft.RaftLog.unstableEntries()
 	msgs := rn.Raft.msgs
-	ready.HardState = curHardState
+	log.Infof("log: %v %v\n", ShowHardState(curHardState), ShowHardState(rn.preHardState))
+	if !hardStateEq(rn.preHardState, curHardState) {
+		ready.HardState = curHardState
+	}
 
 	ready.UnApplyEntry = unapplyEntries
 	ready.UnStableEntry = unstableEntries
@@ -238,8 +237,9 @@ func (rn *RawNode) Ready() Ready {
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
-	// TODO 这个rd 应当与pendingReady是相等的
-	rn.preHardState = rd.HardState
+	if !hardStateEq(rd.HardState, pb.HardState{}) {
+		rn.preHardState = rd.HardState
+	}
 	log.Debugf("raft_id: %v, in advace", rn.Raft.id)
 	if len(rd.UnStableEntry) > 0 {
 		e := rd.UnStableEntry[len(rd.UnStableEntry)-1]

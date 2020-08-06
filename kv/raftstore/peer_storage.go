@@ -336,12 +336,12 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 
 // Apply the peer with given snapshot
 func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_util.WriteBatch, raftWB *engine_util.WriteBatch) (*ApplySnapResult, error) {
-	log.Infof("raft_id: %v ,tag:snap, log: begin to apply snapshot", ps.Tag)
+	log.Infof("raft_id: %v ,tag:snap, log: begin to apply snapshot ", ps.Tag)
 	snapData := new(rspb.RaftSnapshotData)
 	if err := snapData.Unmarshal(snapshot.Data); err != nil {
 		return nil, err
 	}
-	log.Infof("raft_id: %v,tag: snap,log: applysnapshot meta %+v metaData meta %+v\n", ps.getRaftId(), snapData.Meta, snapshot.Metadata)
+	log.Infof("raft_id: %v,tag: snap,log: applysnapshot meta %+v metaData meta %+v lastindex  %v snapindex %v\n", ps.getRaftId(), snapData.Meta, snapshot.Metadata, ps.raftState.LastIndex, snapshot.Metadata.Index)
 	// Hint: things need to do here including: update peer storage state like raftState and applyState, etc,
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
@@ -349,6 +349,11 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	applyResult := &ApplySnapResult{
 		PrevRegion: ps.Region(),
 		Region:     ps.Region(),
+	}
+
+	//TODO ???
+	if ps.raftState.LastIndex >= snapshot.Metadata.Index {
+		return applyResult, nil
 	}
 	applyNotify := make(chan bool)
 	// 更新 kv 中的数据
@@ -362,15 +367,14 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	log.Infof("raft_id: %v,tag: snap,log: sending snapshot apply task\n", ps.getRaftId())
 	applySuccess := <-applyNotify
 
-	log.Infof("raft_id: %v,tag: snap,log: applysnapshot success\n", applySuccess)
+	log.Infof("raft_id: %v,tag: snap,log: applysnapshot success\n", ps.getRaftId())
 	if applySuccess {
 		ps.raftState.LastIndex = snapshot.Metadata.Index
 		ps.raftState.LastTerm = snapshot.Metadata.Term
 		ps.applyState.AppliedIndex = snapshot.Metadata.Index
 		ps.applyState.TruncatedState.Index = snapshot.Metadata.Index
 		ps.applyState.TruncatedState.Term = snapshot.Metadata.Term
-		log.Infof("raft_id: %v,tag: snap,log: update raftState and ApplyState commit %v  \n", snapshot.Metadata.Index)
-		//TODO ????
+		log.Infof("raft_id: %v,tag: snap,log: apply snap ok update raftState and ApplyState commit %v  \n", ps.getRaftId(), snapshot.Metadata.Index)
 		ps.raftState.HardState.Commit = snapshot.Metadata.Index
 		ps.raftState.HardState.Term = snapshot.Metadata.Term
 
@@ -393,18 +397,15 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 
 	ps.Append(ready.GetUnStableEntry(), raftWb)
 
-	// TODO why do this two line
-	hardState := ready.HardState
-	ps.raftState.HardState = &hardState
 	// applysnapshot if we have
 	if ready.Snapshot.Metadata != nil {
 		ps.ApplySnapshot(&ready.Snapshot, raftWb, kvWb)
 	}
 
-	// 这里的检查有何意义？
-	if !raft.IsEmptyHardState(hardState) || len(ready.UnStableEntry) != 0 {
-		raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
+	if !raft.IsEmptyHardState(ready.HardState) {
+		ps.raftState.HardState = &ready.HardState
 	}
+	raftWb.SetMeta(meta.RaftStateKey(ps.region.GetId()), ps.raftState)
 	kvWb.SetMeta(meta.ApplyStateKey(ps.region.GetId()), ps.applyState)
 
 	error := ps.Engines.WriteRaft(raftWb)

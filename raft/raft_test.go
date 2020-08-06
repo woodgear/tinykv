@@ -1020,9 +1020,6 @@ func TestBcastBeat2B(t *testing.T) {
 // 	sm := newTestRaft(1, []uint64{1, 2}, 10, 1, storage)
 // }
 
-
-// 这个测试暗示出handlesnapshot 之后会立即更改lastIndex？？？
-// 在handlesnapshot时 如果snapshot的index大于当前的lastindex  要更正当前的lastindex
 func TestRestoreSnapshot2C(t *testing.T) {
 	s := pb.Snapshot{
 		Metadata: &pb.SnapshotMetadata{
@@ -1127,7 +1124,7 @@ func TestSlowNodeRestore2C(t *testing.T) {
 	nt := newNetwork(nil, nil, nil)
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
-	// 将id为3的node 隔离 
+	// 将id为3的node 隔离
 	nt.isolate(3)
 	for j := 0; j <= 100; j++ {
 		nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
@@ -1135,6 +1132,7 @@ func TestSlowNodeRestore2C(t *testing.T) {
 	lead := nt.peers[1].(*Raft)
 	nextEnts(lead, nt.storage[1])
 	t.Logf("applied to %+v\n", lead.RaftLog.applied)
+	t.Logf("prs %+v\n", ShowPrs(lead.Prs))
 	// 准备snapshot
 	nt.storage[1].CreateSnapshot(lead.RaftLog.applied, &pb.ConfState{Nodes: nodes(lead)}, nil)
 	nt.storage[1].Compact(lead.RaftLog.applied)
@@ -1145,6 +1143,7 @@ func TestSlowNodeRestore2C(t *testing.T) {
 	// node 3 will only be considered as active when node 1 receives a reply from it.
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
 
+	t.Logf("send msg propose\n")
 	// trigger a snapshot
 	nt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 

@@ -124,7 +124,7 @@ func partitioner(t *testing.T, cluster *Cluster, ch chan bool, done *int32, unre
 			}
 		}
 		cluster.ClearFilters()
-		log.Infof("tag: life partition: %v, %v", pa[0], pa[1])
+		log.Infof("tag: ,partition  log: %v, %v", pa[0], pa[1])
 		cluster.AddFilter(&PartitionFilter{
 			s1: pa[0],
 			s2: pa[1],
@@ -411,10 +411,13 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		<-ch_clients
 		log.Debugf("GenericTest Client Stop")
 		if crash {
-			log.Warnf("shutdown servers\n")
+			log.Warnf("tag:stop shutdown servers\n")
 			for i := 1; i <= nservers; i++ {
+				log.Warnf("tag:stop shutdown servers %v start \n", i)
 				cluster.StopServer(uint64(i))
+				log.Warnf("tag:stop shutdown servers %v end \n", i)
 			}
+			log.Warnf("tag:stop shutdown servers over\n")
 			// Wait for a while for servers to shutdown, since
 			// shutdown isn't a real crash and isn't instantaneous
 			time.Sleep(electionTimeout)
@@ -640,7 +643,7 @@ func TestOneSnapshot2C(t *testing.T) {
 	log.Infof("tag: OneSnapshot2C  ClearFilters\n")
 	cluster.ClearFilters()
 
-	// Now snapshot must applied on 为什么.....
+	// Now snapshot must applied on
 	// 当leader收到get时 首先会去同步 这时就会发送snapshot给1了
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k1"), []byte("v1"))
 	MustGetCfEqual(cluster.engines[1], cf, []byte("k100"), []byte("v100"))

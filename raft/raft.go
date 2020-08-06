@@ -276,7 +276,7 @@ func (r *Raft) tick() {
 func (r *Raft) checkPendingSnapshot() {
 	for id, needSendSnap := range r.pendingSnapShot {
 		if needSendSnap {
-			log.Infof("raft_id: %v,tag: snapshot,log: find a pendingSnapshot %v\n", r.id, id)
+			log.Infof("raft_id: %v,tag: snap,log-replcation,log: find a pendingSnapshot %v try send again \n", r.id, id)
 			r.sendAppend(id)
 		}
 	}
@@ -338,7 +338,7 @@ func (r *Raft) Step(m pb.Message) error {
 		// 在投票前 我们要先将不合格的candidate过滤掉
 		if !isValidCandidate(lastIndex, lastTerm, msg) {
 			log.Debugf("raft_id: %v, tag: election, log: reject cause of inconsist log and term from %v im %v", r.id, m.From, r.id)
-			r.sendRejectVote(msg.CandidateId)
+			r.sendRejectVote(msg.CandidateId, m.Term)
 			return nil
 		}
 		// 在这里才是正常的follower 处理request vote的逻辑
@@ -425,13 +425,10 @@ func (r *Raft) sendAppendToAll() {
 // TODO return true if a message was sent ???
 // 当entries被compact且snapshoot没有生成时 直接return false
 func (r *Raft) sendAppend(to uint64) bool {
+	log.Infof("raft_id: %v,tag: log-replcation,log: sendAppendTo %v\n", r.id, to)
 	//TODO check this logic
-	// if r.RaftLog.IsEmpty() {
-	// 	log.Infof("raft_id: %v,tag: leader-view ,log: raftlog is empty \n", r.id)
-	// 	return false
-	// }
-
 	next := r.Prs[to].Next
+	log.Infof("log:next is %v \n", next)
 	lastIndex := r.GetLastIndex()
 	if next > lastIndex {
 		log.Debugf("raft_id: %v,tag: leader-view ,log: empty append??? maybe to update commit", r.id)
@@ -440,21 +437,21 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// TODO some werid
 	// RaftLog里面什么都没有 什么都不用发
 	if next-1 < r.RaftLog.initIndex {
-		log.Warnf("raft_id: %v,tag: leader-view ,log: initIndex > next??")
+		log.Warnf("raft_id: %v,tag: leader-view ,log: initIndex > next??", r.id)
 		return false
 	}
-	log.Infof("raft_id: %v,tag: leader-view ,log: entries %v %v sendAppend to %v\n", r.id, next, lastIndex+1, to)
+	log.Infof("raft_id: %v,tag: ,log: this\n", r.id)
 	entries, err := r.RaftLog.PtrEntries(next, lastIndex+1)
+	log.Infof("raft_id: %v,tag: ,log: this %v %v %v\n", r.id, err, next, lastIndex+1)
 	if err == ErrCompacted {
-		log.Infof("raft_id: %+v,tag: snapshot leader-view ,log: find compact entries send snapshot to %v\n", r.id, to)
+		log.Infof("raft_id: %v,tag: log-replcation,log: send append to %v next %v lastIndex %v compact \n", r.id, to, next, lastIndex)
 		snapshot, err := r.RaftLog.Snapshot()
 		if err == ErrSnapshotTemporarilyUnavailable {
 			r.pendingSnapShot[to] = true
-
-			log.Infof("raft_id: %+v,tag: leader-view ,log: snapshot unabiable %v\n", r.id, to)
+			log.Infof("raft_id: %+v,tag: leader-view,log-replcation,log: snapshot unabiable %v\n", r.id, to)
 			return false
 		}
-		log.Infof("raft_id: %+v,tag: snapshot leader-view ,log: snapshot ok send it\n", r.id)
+		log.Infof("raft_id: %+v,tag: snap,log-replcation,leader-view ,log: snapshot ok send to %v next %v lastindex %v\n", r.id, to, next, lastIndex)
 		r.pendingSnapShot[to] = false
 		r.sendSnapshot(to, snapshot)
 		return true
@@ -464,12 +461,12 @@ func (r *Raft) sendAppend(to uint64) bool {
 		panic(err)
 	}
 	preLogIndex := next - 1
-
+	log.Infof("log:preLogIndex is %v\n", preLogIndex)
 	preLogTerm, error := r.RaftLog.Term(preLogIndex)
 	if error != nil {
 		panic(error)
 	}
-	log.Debugf("raft_id: %v, sendAppend to %v lastIndex %v next %v preLogIndex %v preLoogTerm %v", r.id, to, lastIndex, next, preLogIndex, preLogTerm)
+	log.Debugf("raft_id: %v, tag:log-replcation, log:sendAppend to %v lastIndex %v next %v preLogIndex %v preLoogTerm %v", r.id, to, lastIndex, next, preLogIndex, preLogTerm)
 	r.sendAppendToFollower(AppendEntriesRequest{
 		Term:         r.Term,
 		LeaderID:     r.id,
@@ -514,7 +511,7 @@ func (r *Raft) followerHandleMsgAppend(m *AppendEntriesRequest) error {
 	}
 
 	log.Debugf("raft_id: %v, follower append entry accept %v", r.id, r.GetLastIndex())
-	r.acceptAppenEntries(leaderID, lastMatchIndex)
+	r.sendAcceptAppendEntriesResponse(leaderID, lastMatchIndex)
 	//leader发来的entries的lastIndex和eladerCommit并不一定是相同的
 	lastIndex := r.GetLastIndex()
 	log.Debugf("raft_id: %v, leader is %vleader commit %v cur commit %v lastIndex %v  lastMatchupIndex %v", r.id, leaderID, leaderCommit, r.getCommitedID(), lastIndex, lastMatchIndex)
@@ -532,6 +529,7 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 	if m.Reject {
 		// TODO better
 		if r.Prs[m.From].Next > m.Index && m.Index != 0 {
+			log.Infof("raft_id: %v,tag: log-replcation,log: update next\n", r.id)
 			r.Prs[m.From].Next = m.Index
 		} else {
 			// TODO werid
@@ -539,22 +537,23 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 				r.Prs[m.From].Next--
 			}
 		}
-		log.Debugf("raft_id: %v, tag:GenericTest,leader-view log: handleAppendResponse append reject follower is %v follower lastindex is %v next %v", r.id, m.From, m.Index, r.Prs[m.From].Next)
+		log.Debugf("raft_id: %v, tag:GenericTest,leader-view,log-replcation, log: handleAppendResponse append reject follower is %v follower lastindex is %v next %v", r.id, m.From, m.Index, r.Prs[m.From].Next)
 
 		r.sendAppend(m.From)
 	} else {
 		logTerm, err := r.RaftLog.Term(m.Index)
-		log.Debugf("logTerm %+v %v %v", logTerm, r.Term, m.Index)
+		log.Debugf("raft_id: %v logTerm %+v %v %v", logTerm, r.Term, m.Index, r.id)
 		if err != nil {
 			return err
 		}
+
 		// TODO some werid
 		if logTerm != r.Term {
-			log.Debugf("leader only commit current term log")
+			log.Debugf("raft_id: %v leader only commit current term log", r.id)
 			return nil
 		}
 
-		log.Debugf("raft_id: %v tag: leader-view, log: handleAppendResponse append accept per id %v index %v", r.id, m.From, m.Index)
+		log.Debugf("raft_id: %v tag: log-replcation, log: handleAppendResponse append accept per id %v index %v", r.id, m.From, m.Index)
 		// 正常情况
 		// 更新对应follower的progress
 		// Match代表follower和leader的最长公共前缀序列
@@ -564,7 +563,7 @@ func (r *Raft) leaderHandleMsgAppendResponse(m pb.Message) error {
 		r.Prs[m.From].Next = m.Index + 1
 
 		couldCommit, commitID := r.checkCommit()
-		log.Debugf("couldCommit %v commitID %v", couldCommit, commitID)
+		log.Debugf("raft_id: %v couldCommit %v commitID %v", r.id, couldCommit, commitID)
 		if couldCommit {
 			r.commit(commitID)
 			r.sendAppendToAll()
@@ -669,13 +668,13 @@ func (r *Raft) followerHandleRequestVote(m *RequestVoteRequest) error {
 	if r.Vote == None {
 		r.Vote = m.CandidateId
 		log.Debugf("raft_id: %v, tag:election log: vote agree candidate-id %v  because term == curTerm and vote is none", r.id, m.CandidateId)
-		r.sendAgreeVote(m.CandidateId)
+		r.sendAgreeVote(m.CandidateId, m.Term)
 	} else if r.Vote == m.CandidateId {
 		log.Debugf("raft_id: %v, tag:election vote agree candidate-id %v because candiate term == curTerm and i have vote you already", r.id, m.CandidateId)
-		r.sendAgreeVote(m.CandidateId)
+		r.sendAgreeVote(m.CandidateId, m.Term)
 	} else {
 		log.Debugf("raft_id: %v, tag: election vote reject %v->%v because candiate term == curTerm and i have vote %v", r.id, r.id, m.CandidateId, r.id)
-		r.sendRejectVote(m.CandidateId)
+		r.sendRejectVote(m.CandidateId, m.Term)
 	}
 	return nil
 }
@@ -788,13 +787,13 @@ func (r *Raft) sendHeartbeat(from uint64, to uint64, term uint64, commit uint64)
 	r.send(msg)
 }
 
-func (r *Raft) sendRejectVote(to uint64) {
-	msg := pb.Message{From: r.id, To: to, Term: r.Term, MsgType: pb.MessageType_MsgRequestVoteResponse, Reject: true}
+func (r *Raft) sendRejectVote(to, term uint64) {
+	msg := pb.Message{From: r.id, To: to, Term: term, MsgType: pb.MessageType_MsgRequestVoteResponse, Reject: true}
 	r.send(msg)
 }
 
-func (r *Raft) sendAgreeVote(to uint64) {
-	msg := pb.Message{From: r.id, To: to, Term: r.Term, MsgType: pb.MessageType_MsgRequestVoteResponse, Reject: false}
+func (r *Raft) sendAgreeVote(to, term uint64) {
+	msg := pb.Message{From: r.id, To: to, Term: term, MsgType: pb.MessageType_MsgRequestVoteResponse, Reject: false}
 	r.send(msg)
 }
 
@@ -822,7 +821,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	r.followerHandleMsgAppend(msg)
 }
 
-func (r *Raft) acceptAppenEntries(id uint64, lastMatchIndex uint64) {
+func (r *Raft) sendAcceptAppendEntriesResponse(id uint64, lastMatchIndex uint64) {
 	r.send(pb.Message{From: r.id, To: id, Term: r.Term, Index: lastMatchIndex, Reject: false, MsgType: pb.MessageType_MsgAppendResponse})
 }
 
@@ -853,18 +852,23 @@ func (r *Raft) sendHeartbeatResponse(to uint64) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	log.Infof("raft_id: %v,tag: snapshot,log: handlesnapshot snapindex %v lastindex %v\n", r.id, m.Snapshot.Metadata.Index, r.RaftLog.LastIndex())
+	log.Infof("raft_id: %v,tag: snap,log-replcation ,log: handlesnapshot from %v snapindex %v lastindex %v\n", r.id, m.From, m.Snapshot.Metadata.Index, r.RaftLog.LastIndex())
 	if m.Snapshot.Metadata.Index > r.RaftLog.LastIndex() {
 		r.Lead = m.From
+
 		r.updateNodes(m.Snapshot.Metadata.ConfState.Nodes)
-		r.RaftLog.handleSnapshot(m.Snapshot)
-		r.acceptAppenEntries(m.From, m.Snapshot.Metadata.Index)
+		r.RaftLog.savePendingSnapshot(m.Snapshot)
+		log.Infof("raft_id: %v,tag: log-replcation,log: handlesnapshot accept snapshot from %v index %v \n", r.id, m.From, m.Snapshot.Metadata.Index)
+		r.sendAcceptAppendEntriesResponse(m.From, m.Snapshot.Metadata.Index)
 	}
 }
 
+// TODO what should we do when snapshot update nodes?
 func (r *Raft) updateNodes(nodes []uint64) {
 	for _, prsID := range nodes {
 		r.Prs[prsID] = &Progress{}
+		r.Prs[r.id].Match = r.GetLastIndex()
+		r.Prs[r.id].Next = r.Prs[r.id].Match + 1
 	}
 }
 
