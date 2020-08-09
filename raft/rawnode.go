@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/pingcap-incubator/tinykv/log"
+	. "github.com/pingcap-incubator/tinykv/util"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -196,7 +197,7 @@ func (rn *RawNode) HasReady() bool {
 	// 有未 stable 的 entries
 	// 有未 apply 的 entries
 	// hardState change
-	log.Infof("%v %v %v", ShowHardState(rn.Raft.hardState()), ShowHardState(rn.preHardState), !hardStateEq(rn.Raft.hardState(), rn.preHardState))
+	log.Infof("raft_id: %v hasReady %v %v %v", rn.Raft.id, ShowHardState(rn.Raft.hardState()), ShowHardState(rn.preHardState), !hardStateEq(rn.Raft.hardState(), rn.preHardState))
 	hardStateChange := !hardStateEq(rn.Raft.hardState(), rn.preHardState)
 	unSendMsgs := len(rn.Raft.msgs) != 0
 	unStableEntries := len(rn.Raft.RaftLog.entries) != 0
@@ -261,6 +262,7 @@ func (rn *RawNode) Advance(rd Ready) {
 		rn.Raft.RaftLog.applied = rd.Snapshot.Metadata.Index
 		rn.Raft.RaftLog.committed = rd.Snapshot.Metadata.Index
 		rn.Raft.RaftLog.stabled = rd.Snapshot.Metadata.Index
+		rn.Raft.RaftLog.pendingSnapshot = nil
 	}
 
 	rn.Raft.msgs = []pb.Message{}
